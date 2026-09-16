@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────
-// OffChat · markdown.js — leciutki renderer Markdown (bez zależności).
-// Wystarcza na odpowiedzi czatu: kod, listy, nagłówki, cytaty,
-// pogrubienia, linki, tabele. Zawsze escapuje HTML (anty-XSS).
+// OffChat · markdown.js — tiny dependency-free Markdown renderer.
+// Enough for chat answers: code, lists, headings, quotes,
+// bold, links, tables. Always escapes HTML (anti-XSS).
 // ─────────────────────────────────────────────────────────────
 
 export function escapeHtml(s) {
@@ -15,15 +15,15 @@ export function escapeHtml(s) {
 
 function inline(md) {
   let h = escapeHtml(md);
-  // obrazy: ![alt](url) — tylko http(s)
+  // images: ![alt](url) — http(s) only
   h = h.replace(/!\[([^\]]*)\]\((https?:[^)\s]+)\)/g, (_, alt, url) =>
     `<img src="${url}" alt="${alt}" loading="lazy" referrerpolicy="no-referrer">`);
-  // linki: [tekst](url) — tylko http(s)
+  // links: [text](url) — http(s) only
   h = h.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_, t, url) =>
     `<a href="${url}" target="_blank" rel="noopener noreferrer">${t}</a>`);
-  // kod inline
+  // inline code
   h = h.replace(/`([^`\n]+)`/g, (_, c) => `<code class="ic">${c}</code>`);
-  // pogrubienie + kursywa
+  // bold + italic
   h = h.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   h = h.replace(/(^|\W)\*([^*\n]+)\*/g, "$1<em>$2</em>");
   h = h.replace(/__([^_]+)__/g, "<strong>$1</strong>");
@@ -53,8 +53,8 @@ export function renderMarkdown(src) {
     const code = escapeHtml(fenceBuf.join("\n").replace(/\n$/, ""));
     const lang = escapeHtml(fenceLang);
     html.push(
-      `<div class="codeblock"><div class="codeblock-head"><span>${lang || "kod"}</span>` +
-      `<button class="icon-btn xs copy-code" data-code="${encodeURIComponent(fenceBuf.join("\n"))}" title="Kopiuj kod" aria-label="Kopiuj kod">` +
+      `<div class="codeblock"><div class="codeblock-head"><span>${lang || "code"}</span>` +
+      `<button class="icon-btn xs copy-code" data-code="${encodeURIComponent(fenceBuf.join("\n"))}" title="Copy code" aria-label="Copy code">` +
       `<svg><use href="#i-copy"/></svg></button></div>` +
       `<pre><code${lang ? ` class="lang-${lang}"` : ""}>${code}</code></pre></div>`
     );
@@ -66,7 +66,7 @@ export function renderMarkdown(src) {
   while (i < lines.length) {
     const line = lines[i];
 
-    // --- blok kodu ```
+    // --- code block ```
     const fence = line.match(/^```\s*([\w+-]*)\s*$/);
     if (fence) {
       if (inFence) flushFence();
@@ -76,10 +76,10 @@ export function renderMarkdown(src) {
     }
     if (inFence) { fenceBuf.push(line); i++; continue; }
 
-    // --- pusta linia ---
+    // --- blank line ---
     if (!line.trim()) { i++; continue; }
 
-    // --- nagłówki ---
+    // --- headings ---
     const h = line.match(/^(#{1,4})\s+(.+)$/);
     if (h) {
       const lvl = Math.min(h[1].length + 1, 4);
@@ -88,7 +88,7 @@ export function renderMarkdown(src) {
       continue;
     }
 
-    // --- tabela ---
+    // --- table ---
     if (line.includes("|") && i + 1 < lines.length && isTableSep(lines[i + 1])) {
       const head = splitRow(line);
       i += 2;
@@ -104,7 +104,7 @@ export function renderMarkdown(src) {
       continue;
     }
 
-    // --- cytat ---
+    // --- quote ---
     if (/^>\s?/.test(line)) {
       const buf = [];
       while (i < lines.length && /^>\s?/.test(lines[i])) {
@@ -115,7 +115,7 @@ export function renderMarkdown(src) {
       continue;
     }
 
-    // --- lista punktowana ---
+    // --- bullet list ---
     if (/^\s*[-*•]\s+/.test(line)) {
       const items = [];
       while (i < lines.length && /^\s*[-*•]\s+/.test(lines[i])) {
@@ -126,7 +126,7 @@ export function renderMarkdown(src) {
       continue;
     }
 
-    // --- lista numerowana ---
+    // --- numbered list ---
     if (/^\s*\d+[.)]\s+/.test(line)) {
       const items = [];
       while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
@@ -144,7 +144,7 @@ export function renderMarkdown(src) {
       continue;
     }
 
-    // --- akapit (łącz linie do pustej) ---
+    // --- paragraph (join lines until blank) ---
     const buf = [line];
     i++;
     while (
@@ -158,11 +158,11 @@ export function renderMarkdown(src) {
     html.push(`<p>${buf.map(inline).join("<br>")}</p>`);
   }
 
-  if (inFence) flushFence(); // niezamknięty fence podczas streamingu
+  if (inFence) flushFence(); // unclosed fence during streaming
   return html.join("\n");
 }
 
-/** Bardzo przybliżone liczenie tokenów (na potrzeby paska kontekstu). */
+/** Very rough token counting (for the context bar). */
 export function estimateTokens(text) {
   if (!text) return 0;
   return Math.max(1, Math.ceil(String(text).length / 4));

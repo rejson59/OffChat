@@ -1,65 +1,66 @@
 # 💬 OffChat
 
-**OffChat to strona internetowa, która pozwala uruchamiać całkowicie lokalnie modele AI — z mocą dopasowaną do Twojego urządzenia. Pisz z AI z pełną prywatnością, wprost w przeglądarce!**
+**OffChat is a website that runs AI models entirely locally — with power matched to your device. Chat with AI in full privacy, right in your browser!**
 
-Lekki, statyczny czat ze Small Language Model działającym w 100% po stronie klienta. Zero backendu, zero płatnych API, zero telemetrii. Pierwsze pobranie modelu wymaga internetu — każde kolejne uruchomienie działa **w pełni offline**.
+A lightweight, static chat with a Small Language Model running 100% client-side. Zero backend, zero paid APIs, zero telemetry. The first model download needs the internet — every later launch works **fully offline**.
 
-> 🎯 Cel projektu: **nawet słaby telefon z 3 GB RAM ma odpalić jakikolwiek model** — strona sama bada sprzęt i proponuje bezpieczne modele.
+> 🎯 Project goal: **even a weak phone with 3 GB RAM can run some model** — the page probes the hardware itself and suggests safe models.
 
 ---
 
-## ✨ Funkcje
+## ✨ Features
 
-- 🧠 **AI w przeglądarce** — główny silnik **WebLLM (WebGPU)**, awaryjny fallback **Transformers.js (WASM/CPU)**
-- 📱 **Mobile-first** — lekki (~60 KB własnego kodu), bez frameworków, inference w Web Workerze
-- 🔍 **Auto-dobór modelu** — sonda sprzętu (WebGPU, F16, RAM, rdzenie, wolne miejsce) + budżet pamięci z marginesem bezpieczeństwa
-- 🇵🇱 **Polski na pierwszym miejscu** — każdy model ma ocenę jakości polszczyzny; rekomendacje preferują Qwen / Llama
-- 📦 **Offline** — wagi w Cache API (lub OPFS), app-shell + biblioteki w Service Workerze
-- 💾 **Trwałość** — wątki w IndexedDB, ustawienia w localStorage, eksport/import JSON
-- 🪟 **Szklany UI** — glassmorphism, gradienty, płynne animacje, motyw jasny/ciemny, PWA
-- 📊 **Status na żywo & Telemetria** — „Pobieranie modelu”, „Ładowanie do pamięci”, prędkość (MB/s), czas ETA, pobrane MB oraz tok/s
-- 🚀 **Błyskawiczny start i filtry** — ultra-lekkie modele (< 150 MB), preconnect do serwerów CDN, filtry prędkości i persistent storage
-- 🎮 **Centrum pobierania & Mini-gra** — zminimalizuj pobieranie do pływającego doku, przeglądaj czat i historię, zagraj w neonowego NeuroPonga lub czytaj ciekawostki o AI
-- ⚡ **Kolejkowanie promptów** — napisz pytanie już w trakcie pobierania; odpowiedź wygeneruje się automatycznie po załadowaniu!
+- 🧠 **In-browser AI** — main engine **WebLLM (WebGPU)**, emergency fallback **Transformers.js (WASM/CPU)**
+- 📱 **Mobile-first** — tiny (~70 KB of own code), no frameworks, inference in a Web Worker
+- 🔍 **Automatic model matching** — hardware probe (WebGPU, F16, RAM, cores, free space) + a memory budget with a safety margin
+- 🛡️ **Safe Mode** — auto-detects weak GPUs and simplifies visuals, caps memory, warns before risky models and helps recover from GPU crashes
+- ⚡ **Speed estimates** — every model card shows its expected generation speed in tokens/sec, plus filters and sorting (fastest / smallest / best quality)
+- 📦 **Offline** — weights in Cache API (or OPFS), app-shell + libraries in the Service Worker
+- 💾 **Persistence** — threads in IndexedDB, settings in localStorage, JSON export/import
+- 🎨 **Deep customization** — 5 accent colors, 3 backgrounds, glass on/off, bubble shapes, font size, avatars, light/dark theme, PWA
+- 📊 **Live status & telemetry** — "Downloading model", "Loading into memory", speed (MB/s), ETA, downloaded MB and tok/s
+- 🚀 **Instant start & filters** — ultra-light models (< 150 MB), preconnects to CDN servers, size filters and persistent storage
+- 🎮 **Download hub & mini-game** — minimize the download into a floating dock, browse chats and history, play neon NeuroPong or read AI facts
+- ✍️ **Prompt queueing** — type your question while downloading; the answer generates automatically once loaded!
 
-## 🗂️ Struktura plików
+## 🗂️ File structure
 
 ```
 OffChat/
-├── index.html              # aplikacja (PWA, mobile-first, PL)
-├── 404.html                # fallback GitHub Pages
-├── .nojekyll               # wyłącznik Jekyll na Pages
+├── index.html              # app (PWA, mobile-first, EN)
+├── 404.html                # GitHub Pages fallback
+├── .nojekyll               # Pages Jekyll disabler
 ├── manifest.webmanifest    # PWA
-├── sw.js                   # Service Worker (app-shell + CDN; NIE rusza wag modeli)
+├── sw.js                   # Service Worker (app-shell + CDN; does NOT touch model weights)
 ├── LICENSE                 # MIT
 ├── css/
-│   └── style.css           # szklany, responsywny UI
+│   └── style.css           # glassy, responsive UI
 ├── js/
-│   ├── app.js              # orkiestracja: boot, onboarding, czat, wątki, ustawienia
-│   ├── config.js           # wersje silników, katalog modeli, domyślne ustawienia
-│   ├── download-hub.js     # telemetria pobierania, pływający dok, mini-gra NeuroPong, ciekawostki AI, szablony
-│   ├── hardware.js         # sonda sprzętu + rekomendacje + budżet pamięci
-│   ├── storage.js          # localStorage + IndexedDB + eksport/import + cache modeli
-│   ├── engine.js           # silnik inference (WebLLM + Transformers.js, ładowany leniwie)
-│   ├── llm-worker.js       # Web Worker odgradzający UI od obliczeń
-│   ├── engine-proxy.js     # fasada: worker z fallbackiem do wątku głównego
-│   ├── markdown.js         # leciutki renderer Markdown (bez zależności, anty-XSS)
-│   └── ui.js               # toasty, modale, formatowanie
-├── icons/                  # ikony PWA (192/512/maskable/apple/favicon/SVG)
+│   ├── app.js              # orchestration: boot, onboarding, chat, threads, settings
+│   ├── config.js           # engine versions, model catalog, default settings
+│   ├── download-hub.js     # download telemetry, floating dock, NeuroPong mini-game, AI facts, templates
+│   ├── hardware.js         # hardware probe + recommendations + memory budget
+│   ├── storage.js          # localStorage + IndexedDB + export/import + model cache
+│   ├── engine.js           # inference engine (WebLLM + Transformers.js, loaded lazily)
+│   ├── llm-worker.js       # Web Worker shielding the UI from compute
+│   ├── engine-proxy.js     # facade: worker with a main-thread fallback
+│   ├── markdown.js         # tiny dependency-free Markdown renderer (anti-XSS)
+│   └── ui.js               # toasts, modals, formatting
+├── icons/                  # PWA icons (192/512/maskable/apple/favicon/SVG)
 ```
 
-## 🚀 Deployment na GitHub Pages
+## 🚀 Deploying to GitHub Pages
 
-Repo jest gotowe do wdrożenia **bez kroku build** — to czyste statyczne pliki.
+The repo is ready to deploy **with no build step** — pure static files.
 
-**Opcja A — z brancha (najprostsza):**
-1. Wypchnij kod na `main`.
-2. GitHub → *Settings → Pages → Source: Deploy from a branch* → wybierz `main` i `/ (root)`.
-3. Gotowe: `https://<user>.github.io/OffChat/`.
+**Option A — from a branch (simplest):**
+1. Push the code to `main`.
+2. GitHub → *Settings → Pages → Source: Deploy from a branch* → pick `main` and `/ (root)`.
+3. Done: `https://<user>.github.io/OffChat/`.
 
-**Opcja B — przez GitHub Actions (opcjonalnie):**
+**Option B — via GitHub Actions (optional):**
 1. GitHub → *Settings → Pages → Source: GitHub Actions*.
-2. Utwórz ręcznie plik `.github/workflows/pages.yml` o treści (standardowy deployment statyczny):
+2. Manually create `.github/workflows/pages.yml` (standard static deployment):
 
 ```yaml
 name: Deploy to GitHub Pages
@@ -81,87 +82,112 @@ jobs:
         uses: actions/deploy-pages@v4
 ```
 
-3. Każdy push na `main` wdraża stronę automatycznie.
+3. Every push to `main` deploys automatically.
 
-> Wszystkie ścieżki są względne (`./`), więc działa zarówno pod `/OffChat/`, jak i na własnej domenie.
+> All paths are relative (`./`), so it works under both `/OffChat/` and a custom domain.
 
-**Lokalne testy:** wystarczy statyczny serwer, np. `python3 -m http.server 8080` i adres `http://localhost:8080`.
+**Local testing:** any static server is enough, e.g. `python3 -m http.server 8080` and `http://localhost:8080`.
 
-## 🧠 Silniki i modele
+## 🧠 Engines & models
 
-| Silnik | Backend | Kiedy | Biblioteka (CDN, wersja przypięta) |
+| Engine | Backend | When | Library (CDN, pinned version) |
 |---|---|---|---|
-| **WebLLM** | WebGPU | domyślnie (Chrome/Edge 113+, Opera, Safari 26+) | `@mlc-ai/web-llm@0.2.84` (esm.sh → jsDelivr fallback) |
-| **Transformers.js** | WASM/CPU | brak WebGPU (Firefox, starsze Safari, słabe GPU) | `@huggingface/transformers@3.8.1` |
+| **WebLLM** | WebGPU | default (Chrome/Edge 113+, Opera, Safari 26+) | `@mlc-ai/web-llm@0.2.84` (esm.sh → jsDelivr fallback) |
+| **Transformers.js** | WASM/CPU | no WebGPU (Firefox, older Safari, weak GPUs) | `@huggingface/transformers@3.8.1` |
 
-Biblioteki ładują się **leniwie** — dopiero po wyborze modelu. Import próbuje kolejno kilka CDN (odporność na awarię).
+Libraries load **lazily** — only after a model is picked. Imports try several CDNs in order (outage resilience).
 
-### Katalog WebLLM (aktualizowalny w `js/config.js`)
+### WebLLM catalog (editable in `js/config.js`)
 
-| Model | Rozmiar | Pamięć | Polski | Tier |
-|---|---|---|---|---|
-| SmolLM2 360M | ~260 MB | 376 MB | ★★☆☆☆ | ultra — ruszy wszędzie |
-| Qwen 2.5 0.5B | ~460 MB | 944 MB | ★★★★☆ | mini |
-| Llama 3.2 1B | ~800 MB | 879 MB | ★★★★☆ | mini — faworyt na słabe telefony |
-| Qwen 3 0.6B 🧪 | ~600 MB | 1403 MB | ★★★★☆ | smart |
-| Gemma 2 2B (1k) | ~1,5 GB | 1583 MB | ★★★★☆ | smart |
-| **Qwen 2.5 1.5B** | ~1 GB | 1629 MB | ★★★★★ | smart — król średniej wagi |
-| SmolLM2 1.7B | ~1,1 GB | 1774 MB | ★★★☆☆ | smart |
-| Gemma 2 2B | ~1,5 GB | 1895 MB | ★★★★☆ | pro |
-| Qwen 3 1.7B 🧪 | ~1,3 GB | 2036 MB | ★★★★★ | pro |
-| **Llama 3.2 3B** | ~2 GB | 2263 MB | ★★★★★ | pro — złoty środek |
-| Phi 3.5 mini (1k) | ~2,3 GB | 2520 MB | ★★★☆☆ | pro — geniusz logiki |
-| Qwen 3 4B 🧪 | ~2,6 GB | 3431 MB | ★★★★★ | max (desktop) |
-| Llama 3.1 8B (1k) | ~4,9 GB | 4598 MB | ★★★★★ | max (desktop) |
+Speeds are estimates in tokens/sec: phones land near the low end, desktop GPUs near the high end.
 
-🧪 = wariant bazowy/eksperymentalny (nie jest domyślną rekomendacją).
+| Model | Size | Memory | Speed (est.) | Quality | Tier |
+|---|---|---|---|---|---|
+| SmolLM2 135M | ~60 MB | 360 MB | 60–150 tok/s | ★★☆☆☆ | ultra — runs everywhere |
+| SmolLM2 360M | ~260 MB | 376 MB | 40–100 tok/s | ★★☆☆☆ | ultra |
+| TinyLlama 1.1B | ~700 MB | 697 MB | 25–70 tok/s | ★★☆☆☆ | mini — a tiny classic |
+| Llama 3.2 1B | ~800 MB | 879 MB | 20–60 tok/s | ★★★★☆ | mini — favorite for weak phones |
+| Qwen 2.5 0.5B | ~460 MB | 944 MB | 30–80 tok/s | ★★★☆☆ | mini |
+| Qwen Coder 0.5B 💻 | ~460 MB | 945 MB | 30–80 tok/s | ★★★☆☆ | mini — pocket coding helper |
+| Qwen 3 0.6B 🧪 | ~600 MB | 1403 MB | 25–70 tok/s | ★★★☆☆ | smart |
+| Gemma 2 2B (1k) | ~1.5 GB | 1583 MB | 12–35 tok/s | ★★★★☆ | smart |
+| **Qwen 2.5 1.5B** | ~1 GB | 1629 MB | 15–45 tok/s | ★★★★☆ | smart — mid-weight king |
+| Qwen Coder 1.5B 💻 | ~1 GB | 1630 MB | 15–40 tok/s | ★★★★☆ | smart — code specialist |
+| SmolLM2 1.7B | ~1.1 GB | 1774 MB | 15–45 tok/s | ★★★☆☆ | smart |
+| Gemma 2 2B | ~1.5 GB | 1895 MB | 12–35 tok/s | ★★★★☆ | pro |
+| Qwen 3 1.7B 🧪 | ~1.3 GB | 2036 MB | 14–40 tok/s | ★★★★☆ | pro |
+| **Llama 3.2 3B** | ~2 GB | 2263 MB | 10–30 tok/s | ★★★★★ | pro — the sweet spot |
+| Hermes 3 3B | ~2 GB | 2264 MB | 10–30 tok/s | ★★★★★ | pro |
+| Qwen 2.5 3B | ~1.9 GB | 2505 MB | 9–28 tok/s | ★★★★★ | pro |
+| Qwen Coder 3B 💻 | ~1.9 GB | 2505 MB | 9–25 tok/s | ★★★★★ | pro — serious coding |
+| Phi 3.5 mini (1k) | ~2.3 GB | 2520 MB | 8–22 tok/s | ★★★★☆ | pro — logic genius |
+| Qwen 3 4B 🧪 | ~2.6 GB | 3431 MB | 6–18 tok/s | ★★★★☆ | max (desktop) |
+| Phi 4 mini | ~2.4 GB | 3438 MB | 6–18 tok/s | ★★★★★ | max — compact reasoner |
+| Mistral 7B v0.3 | ~4.3 GB | 4573 MB | 4–12 tok/s | ★★★★★ | max (desktop) |
+| Llama 3.1 8B (1k) | ~4.9 GB | 4598 MB | 4–11 tok/s | ★★★★★ | max (desktop) |
+| Hermes 3 8B | ~4.9 GB | 4876 MB | 4–11 tok/s | ★★★★★ | max (desktop) |
+| Llama 3.1 8B | ~4.9 GB | 5001 MB | 4–10 tok/s | ★★★★★ | max (desktop) |
+| DeepSeek R1 8B 🧠 | ~4.9 GB | 5001 MB | 3–10 tok/s | ★★★★★ | max — thinks step by step |
+| Qwen 2.5 7B | ~4.4 GB | 5107 MB | 4–12 tok/s | ★★★★★ | max (desktop) |
+| DeepSeek R1 7B 🧠 | ~4.4 GB | 5107 MB | 3–10 tok/s | ★★★★★ | max — reasoning model |
+| Qwen 3 8B 🧪 | ~5.2 GB | 5696 MB | 3–10 tok/s | ★★★★☆ | max (desktop) |
+| Gemma 2 9B | ~5.4 GB | 6422 MB | 2–8 tok/s | ★★★★★ | max — the powerhouse |
 
-### Tryb zgodności WASM (Transformers.js, ONNX q4)
+🧪 = base/experimental variant (never the default recommendation). 💻 = code specialist. 🧠 = reasoning model (thinks before answering, slower output).
 
-SmolLM2 135M (~90 MB) · SmolLM2 360M (~230 MB) · Qwen 2.5 0.5B (~450 MB) · Llama 3.2 1B (~750 MB).
+### WASM compatibility mode (Transformers.js, ONNX q4)
 
-## 🛡️ Jak dbamy o pamięć (filozofia „3 GB RAM”)
+SmolLM2 135M (~90 MB, 4–12 tok/s) · SmolLM2 360M (~230 MB, 2–7 tok/s) · TinyLlama 1.1B (~680 MB, 1–4 tok/s) · Qwen 2.5 0.5B (~450 MB, 1–4 tok/s) · Qwen 2.5 1.5B (~950 MB, 0.5–2 tok/s) · SmolLM2 1.7B (~1 GB, 0.5–2 tok/s) · Llama 3.2 1B (~750 MB, 0.5–3 tok/s).
 
-1. **Konserwatywny budżet** — karta mobilna dostaje zwykle ≤1,75 GB; model musi zmieścić się z 12% zapasem.
-2. **Rekomendacja, nie zgadywanie** — sortowanie: jakość polskiego → stabilność → rozmiar w budżecie.
-3. **Tryb oszczędzania pamięci** (domyślnie na telefonach) — obcina kontekst KV do 2k.
-4. **Auto-podmiana F16→F32** — brak `shader-f16`? Silnik sam bierze wariant `q4f32`.
-5. **Limity historii** — max 60 wątków / 300 wiadomości, renderowanie ostatnich 60 (reszta na życzenie).
-6. **Ważenie raz** — Service Worker celowo **nie** cache'uje wag (robią to silniki), by nie dublować gigabajtów.
+## 🛡️ How we treat memory (the "3 GB RAM" philosophy)
 
-## 📴 Praca offline — co gdzie leży
+1. **Conservative budget** — a mobile GPU usually gets ≤1.75 GB; a model must fit with a 12% reserve.
+2. **Recommendations, not guessing** — sorting: answer quality → stability → size within budget.
+3. **Safe Mode** (automatic on weak phones) — simplified visuals, capped context, fewer rendered messages, oversize-load warnings.
+4. **Oversize guard** — picking a model above your budget shows an explicit crash warning first.
+5. **GPU-crash recovery** — after a device-lost / out-of-memory error the app offers Safe Mode or a CPU model in one click.
+6. **Auto F16→F32 swap** — no `shader-f16`? The engine takes a `q4f32` build by itself.
+7. **History limits** — max 60 threads / 300 messages, renders the most recent 60 (30 in Safe Mode, more on demand).
+8. **Background GPU truce** — animated background pauses while the GPU runs inference; the mini-game drops to cheap 30 fps rendering in Safe Mode.
+9. **Weigh once** — the Service Worker deliberately does **not** cache weights (the engines do), to avoid duplicating gigabytes.
 
-| Dane | Magazyn | Zarządca |
+## 📴 Offline work — what lives where
+
+| Data | Store | Managed by |
 |---|---|---|
-| App-shell (HTML/CSS/JS/ikony) | Cache API `offchat-shell-v1` | Service Worker |
-| Biblioteki silników (esm.sh/jsDelivr) | Cache API `offchat-cdn-v1` | Service Worker |
-| Wagi modeli WebLLM | Cache API (`webllm/…`) lub OPFS | WebLLM (`cacheBackend` w ustawieniach) |
-| Wagi modeli ONNX | Cache API (`transformers-cache`) | Transformers.js |
-| Wątki i wiadomości | IndexedDB (+ fallback RAM) | `storage.js` |
-| Ustawienia | localStorage | `storage.js` |
+| App-shell (HTML/CSS/JS/icons) | Cache API `offchat-shell-v4` | Service Worker |
+| Engine libraries (esm.sh/jsDelivr) | Cache API `offchat-cdn-v1` | Service Worker |
+| WebLLM model weights | Cache API (`webllm/…`) or OPFS | WebLLM (`cacheBackend` in settings) |
+| ONNX model weights | Cache API (`transformers-cache`) | Transformers.js |
+| Threads and messages | IndexedDB (+ RAM fallback) | `storage.js` |
+| Settings | localStorage | `storage.js` |
 
-## 🌐 Wsparcie przeglądarek
+## 🌐 Browser support
 
-| Przeglądarka | Silnik | Uwagi |
+| Browser | Engine | Notes |
 |---|---|---|
-| Chrome / Edge 113+ (desktop i Android) | WebGPU ✅ | pełnia funkcji |
-| Opera 99+ | WebGPU ✅ | pełnia funkcji |
-| Safari 26+ | WebGPU ✅ / WASM | zależnie od urządzenia |
-| Firefox | WASM ✅ | brak WebGPU — tryb zgodności CPU |
-| Starsze / iOS<26 | WASM ✅ | wolniej, ale działa |
+| Chrome / Edge 113+ (desktop & Android) | WebGPU ✅ | full experience |
+| Opera 99+ | WebGPU ✅ | full experience |
+| Safari 26+ | WebGPU ✅ / WASM | depends on the device |
+| Firefox | WASM ✅ | no WebGPU — CPU compatibility mode |
+| Older / iOS < 26 | WASM ✅ | slower, but works |
 
-> GitHub Pages nie wysyła nagłówków COOP/COEP, więc WASM działa jednowątkowo — to zamierzone i w pełni wspierane.
+> GitHub Pages doesn't send COOP/COEP headers, so WASM runs single-threaded — intentional and fully supported.
 
-## 🔒 Prywatność
+## 🌍 Language
 
-Wszystko dzieje się lokalnie. Jedyny ruch sieciowy to: pobranie plików aplikacji, bibliotek (CDN) oraz wag modeli (Hugging Face) — **treść rozmów nigdy nie opuszcza urządzenia**. Brak kont, brak telemetrii, brak ciasteczek.
+The interface is in English. The default system prompt doesn't force any language — every model simply answers in the same language you write in, so each one can use whatever it handles best. You can still set a fixed language via a custom system prompt in Settings.
 
-## 🛠️ Rozwój
+## 🔒 Privacy
 
-- Kod to waniliowy JS (ES2022, moduły) — bez bundlera i `npm install`.
-- Nowy model WebLLM? Dopisz wpis do `MODEL_CATALOG` w `js/config.js` (identyfikator musi istnieć w `prebuiltAppConfig` danej wersji WebLLM).
-- Test składni: `node --check js/*.js` — albo odpal `python3 -m http.server` i klikaj.
+Everything happens locally. The only network traffic is: downloading app files, libraries (CDN) and model weights (Hugging Face) — **conversation content never leaves the device**. No accounts, no telemetry, no cookies.
 
-## 📄 Licencja
+## 🛠️ Development
 
-MIT — rób z tym, co chcesz. Miłego czatowania offline! 💜
+- The code is vanilla JS (ES2022, modules) — no bundler, no `npm install`.
+- New WebLLM model? Add an entry to `MODEL_CATALOG` in `js/config.js` (the id must exist in that WebLLM version's `prebuiltAppConfig`), including a `tps: [min, max]` estimate.
+- Syntax test: `node --check js/*.js` — or serve with `python3 -m http.server` and click around.
+
+## 📄 License
+
+MIT — do whatever you want with it. Happy offline chatting! 💜

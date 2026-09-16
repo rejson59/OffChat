@@ -1,10 +1,10 @@
 // ─────────────────────────────────────────────────────────────
-// OffChat · engine.js — silnik wnioskowania (inference) 100% lokalnie.
-// Działa w Web Workerze (płynny UI) z awaryjnym fallbackiem do wątku głównego.
-// Wspiera dwa backendy:
-//   1) WebLLM (WebGPU) — szybki, domyślny na większości urządzeń.
-//   2) Transformers.js (WASM/CPU) — tryb zgodności bez WebGPU.
-// Biblioteki silników ładowane są LENIWIE z CDN (z listą fallbacków).
+// OffChat · engine.js — 100% local inference engine.
+// Runs in a Web Worker (smooth UI) with an emergency fallback
+// to the main thread. Supports two backends:
+//   1) WebLLM (WebGPU) — fast, default on most devices.
+//   2) Transformers.js (WASM/CPU) — compatibility mode without WebGPU.
+// Engine libraries load LAZILY from a CDN (with a fallback list).
 // ─────────────────────────────────────────────────────────────
 import { ENGINE_CDN, ORT_WASM_CDN } from "./config.js";
 
@@ -19,7 +19,7 @@ async function importFirst(urls) {
   }
   throw lastErr instanceof Error
     ? lastErr
-    : new Error("Nie udało się pobrać silnika AI z żadnego CDN.");
+    : new Error("Could not download the AI engine from any CDN.");
 }
 
 function mapWebLLMProgress(rep) {
@@ -33,12 +33,12 @@ function mapWebLLMProgress(rep) {
 
 function mapTFProgress(p, dtype) {
   if (!p || typeof p !== "object") {
-    return { phase: "download", progress: 0, text: `Wariant ${dtype}…` };
+    return { phase: "download", progress: 0, text: `Variant ${dtype}…` };
   }
   const file = String(p.file || "model");
   const short = file.split("/").pop();
   if (p.status === "initiate") {
-    return { phase: "download", progress: 0, text: `Start: ${short}` };
+    return { phase: "download", progress: 0, text: `Starting: ${short}` };
   }
   if (p.status === "download" || p.status === "progress") {
     const pct = Math.round(Number(p.progress || 0));
@@ -49,26 +49,26 @@ function mapTFProgress(p, dtype) {
     return { phase: "download", progress: Math.min(0.99, pct / 100), text: `${short} — ${pct}%${extra}` };
   }
   if (p.status === "done") {
-    return { phase: "load", progress: 1, text: `Gotowe: ${short}` };
+    return { phase: "load", progress: 1, text: `Done: ${short}` };
   }
-  return { phase: "load", progress: 0.5, text: `${p.status || "ładowanie"}: ${short}` };
+  return { phase: "load", progress: 0.5, text: `${p.status || "loading"}: ${short}` };
 }
 
 /**
- * Znalezienie wariantu f32 tego samego modelu (gdy GPU nie ma shader-f16).
- * Np. "Llama-3.2-1B-Instruct-q4f16_1-MLC" → "…-q4f32_1-MLC",
- *     "SmolLM2-135M-Instruct-q0f16-MLC"   → "…-q0f32-MLC".
- * Dokładnie zachowuje sufiks (-MLC / -MLC-1k), więc model 1k nie zamieni
- * się nigdy w wariant 4k (i odwrotnie).
+ * Find the f32 sibling of a model (when the GPU lacks shader-f16).
+ * E.g. "Llama-3.2-1B-Instruct-q4f16_1-MLC" → "…-q4f32_1-MLC",
+ *      "SmolLM2-135M-Instruct-q0f16-MLC"   → "…-q0f32-MLC".
+ * The suffix (-MLC / -MLC-1k) is preserved exactly, so a 1k model
+ * never turns into a 4k variant (and vice versa).
  */
 function findF32Sibling(list, modelId) {
-  // Szybka ścieżka: klasyczna podmiana q4f16_1 → q4f32_1
+  // Fast path: the classic q4f16_1 → q4f32_1 swap.
   const quickId = modelId.replace("q4f16_1", "q4f32_1");
   if (quickId !== modelId) {
     const quick = list.find((r) => r.model_id === quickId);
     if (quick) return quick;
   }
-  // Ogólna ścieżka: ta sama baza nazwy + ten sam sufiks + dowolny wariant f32
+  // Generic path: same name base + same suffix + any f32 variant.
   const m = modelId.match(/^(.*?)(?:q\d?f\d+(?:_\d+)?)(-MLC.*)?$/);
   if (!m || !m[1]) return null;
   const base = m[1];
@@ -81,7 +81,7 @@ function findF32Sibling(list, modelId) {
       /f32/.test(r.model_id)
   );
   if (!sibs.length) return null;
-  // Preferuj wariant q4f32 (zwykle mniejszy niż q0f32), potem dowolny
+  // Prefer the q4f32 variant (usually smaller than q0f32), then anything.
   return sibs.find((r) => /q4f32/.test(r.model_id)) || sibs[0];
 }
 
@@ -89,12 +89,12 @@ export class Engine {
   constructor() {
     this.kind = null;       // 'webllm' | 'transformers' | null
     this.modelId = null;
-    this.webllm = null;     // moduł WebLLM
-    this.wEngine = null;    // instancja MLCEngine
-    this.tf = null;         // moduł transformers
-    this.pipe = null;       // pipeline text-generation
+    this.webllm = null;     // WebLLM module
+    this.wEngine = null;    // MLCEngine instance
+    this.tf = null;         // transformers module
+    this.pipe = null;       // text-generation pipeline
     this.tok = null;
-    this.gen = 0;           // licznik generacji (przerwania)
+    this.gen = 0;           // generation counter (interruptions)
     this.aborted = false;
   }
 
@@ -106,25 +106,25 @@ export class Engine {
     this.gen++;
     this.aborted = true;
     if (this.kind === "webllm" && this.wEngine) {
-      try { this.wEngine.interruptGenerate(); } catch { /* ignoruj */ }
+      try { this.wEngine.interruptGenerate(); } catch { /* ignore */ }
     }
   }
 
   // ── WebLLM (WebGPU) ──────────────────────────────────────────
   async loadWebLLM({ modelId, cacheBackend = "cache", contextWindow = 0, hasF16 = true, onProgress }) {
     this.abort();
-    onProgress?.({ phase: "download", progress: 0, text: "Ładowanie silnika WebLLM…" });
+    onProgress?.({ phase: "download", progress: 0, text: "Loading the WebLLM engine…" });
     const webllm = (this.webllm ||= await importFirst(ENGINE_CDN.webllm));
 
     const list = [...(webllm.prebuiltAppConfig?.model_list || [])];
     let rec = list.find((r) => r.model_id === modelId);
     if (!rec) {
       throw new Error(
-        `Model ${modelId} nie występuje w tej wersji silnika WebLLM. Wybierz inny model z listy.`
+        `MODEL_NOT_FOUND: ${modelId} is not shipped with this WebLLM build. Pick another model from the list.`
       );
     }
-    // Automatyczna podmiana wariantu, gdy GPU nie ma shader-f16.
-    // Obsługuje wszystkie schematy nazw: q4f16_1→q4f32_1, q4f16→q4f32, q0f16→q0f32.
+    // Automatic variant swap when the GPU lacks shader-f16.
+    // Handles every naming scheme: q4f16_1→q4f32_1, q4f16→q4f32, q0f16→q0f32.
     if (rec.required_features?.includes("shader-f16") && !hasF16) {
       const sib = findF32Sibling(list, modelId);
       if (sib) {
@@ -132,17 +132,17 @@ export class Engine {
         modelId = sib.model_id;
       } else {
         throw new Error(
-          "Twoje GPU nie wspiera shader-f16, a model nie ma wariantu zastępczego. Wybierz inny model."
+          "Your GPU has no shader-f16 support and this model has no fallback build. Pick another model."
         );
       }
     }
 
     if (this.wEngine) {
-      try { await this.wEngine.unload(); } catch { /* ignoruj */ }
+      try { await this.wEngine.unload(); } catch { /* ignore */ }
       this.wEngine = null;
     }
     if (this.pipe) {
-      try { await this.pipe.dispose?.(); } catch { /* ignoruj */ }
+      try { await this.pipe.dispose?.(); } catch { /* ignore */ }
       this.pipe = null;
       this.tok = null;
     }
@@ -158,7 +158,7 @@ export class Engine {
       model_list: [{ ...rec, overrides }],
     };
 
-    onProgress?.({ phase: "download", progress: 0, text: "Nawiązywanie… (pierwsze pobranie waży setki MB)" });
+    onProgress?.({ phase: "download", progress: 0, text: "Connecting… (first download weighs hundreds of MB)" });
     this.wEngine = await webllm.CreateMLCEngine(modelId, {
       appConfig,
       logLevel: "WARN",
@@ -166,12 +166,12 @@ export class Engine {
     });
     this.kind = "webllm";
     this.modelId = modelId;
-    onProgress?.({ phase: "ready", progress: 1, text: "Model gotowy" });
+    onProgress?.({ phase: "ready", progress: 1, text: "Model ready" });
     return { modelId, engine: "webllm" };
   }
 
   async generateWebLLM(messages, { onToken, temperature = 0.7, maxTokens = 512, topP = 0.9 } = {}) {
-    if (!this.wEngine) throw new Error("Silnik WebLLM nie jest załadowany.");
+    if (!this.wEngine) throw new Error("The WebLLM engine is not loaded.");
     const myGen = ++this.gen;
     this.aborted = false;
     const t0 = performance.now();
@@ -192,7 +192,7 @@ export class Engine {
     let usage = null;
     for await (const chunk of stream) {
       if (this.aborted || myGen !== this.gen) {
-        try { await this.wEngine.interruptGenerate(); } catch { /* ignoruj */ }
+        try { await this.wEngine.interruptGenerate(); } catch { /* ignore */ }
         break;
       }
       if (chunk?.usage) usage = chunk.usage;
@@ -219,7 +219,7 @@ export class Engine {
   // ── Transformers.js (WASM/CPU) ───────────────────────────────
   async loadTransformers({ modelId, dtypes = ["q4f16", "q4", "q8"], device = "wasm", threads = 1, onProgress }) {
     this.abort();
-    onProgress?.({ phase: "download", progress: 0, text: "Ładowanie silnika Transformers.js (WASM)…" });
+    onProgress?.({ phase: "download", progress: 0, text: "Loading the Transformers.js engine (WASM)…" });
     const tf = (this.tf ||= await importFirst(ENGINE_CDN.transformers));
 
     try {
@@ -240,11 +240,11 @@ export class Engine {
     } catch { /* best-effort */ }
 
     if (this.wEngine) {
-      try { await this.wEngine.unload(); } catch { /* ignoruj */ }
+      try { await this.wEngine.unload(); } catch { /* ignore */ }
       this.wEngine = null;
     }
     if (this.pipe) {
-      try { await this.pipe.dispose?.(); } catch { /* ignoruj */ }
+      try { await this.pipe.dispose?.(); } catch { /* ignore */ }
       this.pipe = null;
       this.tok = null;
     }
@@ -252,7 +252,7 @@ export class Engine {
     let lastErr = null;
     for (const dtype of dtypes) {
       try {
-        onProgress?.({ phase: "download", progress: 0, text: `Wariant ${dtype} — łączenie…` });
+        onProgress?.({ phase: "download", progress: 0, text: `Variant ${dtype} — connecting…` });
         this.pipe = await tf.pipeline("text-generation", modelId, {
           device,
           dtype,
@@ -261,7 +261,7 @@ export class Engine {
         this.tok = this.pipe.tokenizer;
         this.kind = "transformers";
         this.modelId = modelId;
-        onProgress?.({ phase: "ready", progress: 1, text: "Model gotowy" });
+        onProgress?.({ phase: "ready", progress: 1, text: "Model ready" });
         return { modelId, engine: "transformers", dtype };
       } catch (e) {
         lastErr = e;
@@ -271,11 +271,11 @@ export class Engine {
     }
     throw lastErr instanceof Error
       ? lastErr
-      : new Error(`Nie udało się załadować modelu ${modelId} w żadnym wariancie.`);
+      : new Error(`Could not load model ${modelId} in any variant.`);
   }
 
   buildTFPrompt(messages) {
-    // 1) oficjalny chat template tokenizera
+    // 1) the tokenizer's official chat template
     try {
       if (this.tok?.apply_chat_template) {
         return this.tok.apply_chat_template(messages, {
@@ -283,19 +283,19 @@ export class Engine {
           add_generation_prompt: true,
         });
       }
-    } catch { /* fallback poniżej */ }
-    // 2) ręczny, uniwersalny format
+    } catch { /* fallback below */ }
+    // 2) manual, universal format
     return messages
       .map((m) => {
         if (m.role === "system") return `System: ${m.content}`;
-        if (m.role === "user") return `Użytkownik: ${m.content}`;
-        return `Asystent: ${m.content}`;
+        if (m.role === "user") return `User: ${m.content}`;
+        return `Assistant: ${m.content}`;
       })
-      .join("\n\n") + "\n\nAsystent:";
+      .join("\n\n") + "\n\nAssistant:";
   }
 
   async generateTransformers(messages, { onToken, temperature = 0.7, maxTokens = 512, topP = 0.9 } = {}) {
-    if (!this.pipe || !this.tok) throw new Error("Silnik WASM nie jest załadowany.");
+    if (!this.pipe || !this.tok) throw new Error("The WASM engine is not loaded.");
     const tf = this.tf;
     const myGen = ++this.gen;
     this.aborted = false;
@@ -309,7 +309,7 @@ export class Engine {
       skip_special_tokens: true,
       callback_function: (chunkText) => {
         if (this.aborted || myGen !== this.gen) return;
-        // TextStreamer potrafi wołać z pełnym tekstem lub przyrostem — obsłuż oba.
+        // TextStreamer may call with the full text or a delta — handle both.
         let piece = String(chunkText ?? "");
         if (piece.startsWith(full) && full.length > 0) piece = piece.slice(full.length);
         else if (full.endsWith(piece) && piece.length > 0) piece = "";
@@ -338,7 +338,7 @@ export class Engine {
       }
       throw e;
     }
-    // Autorytatywny pełny tekst (streamer mógł gubić ogony na niektórych modelach).
+    // Authoritative full text (the streamer may drop tails on some models).
     const finalText = String(out?.[0]?.generated_text ?? full);
     if (finalText.length > full.length && !(this.aborted || myGen !== this.gen)) {
       const rest = finalText.slice(full.length);
@@ -357,15 +357,15 @@ export class Engine {
     };
   }
 
-  // ── Wspólne ──────────────────────────────────────────────────
+  // ── Shared ───────────────────────────────────────────────────
   async unload() {
     this.abort();
     if (this.wEngine) {
-      try { await this.wEngine.unload(); } catch { /* ignoruj */ }
+      try { await this.wEngine.unload(); } catch { /* ignore */ }
       this.wEngine = null;
     }
     if (this.pipe) {
-      try { await this.pipe.dispose?.(); } catch { /* ignoruj */ }
+      try { await this.pipe.dispose?.(); } catch { /* ignore */ }
       this.pipe = null;
       this.tok = null;
     }

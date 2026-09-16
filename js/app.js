@@ -1,13 +1,14 @@
 // ─────────────────────────────────────────────────────────────
-// OffChat · app.js — orkiestracja aplikacji: boot, onboarding,
-// czat, wątki, ustawienia, statusy, PWA.
+// OffChat · app.js — app orchestration: boot, onboarding,
+// chat, threads, settings, statuses, PWA.
 // ─────────────────────────────────────────────────────────────
 import {
-  APP_VERSION, MODEL_CATALOG, WASM_CATALOG, getModel,
-  DEFAULT_SETTINGS, SUGGESTED_PROMPTS, LIMITS, TIERS,
+  APP_VERSION, MODEL_CATALOG, WASM_CATALOG, getModel, formatTps,
+  DEFAULT_SETTINGS, LIMITS, TIERS, ACCENTS, BG_STYLES, BUBBLE_STYLES,
 } from "./config.js";
 import {
   probeHardware, recommendModels, suggestContextWindow, deviceSummary,
+  isWeakDevice,
 } from "./hardware.js";
 import {
   loadSettings, saveSettings, Threads, Messages,
@@ -18,7 +19,7 @@ import { DownloadHub } from "./download-hub.js";
 import { renderMarkdown, estimateTokens } from "./markdown.js";
 import {
   $, $all, el, toast, openModal, confirmDialog,
-  fmtBytes, fmtSizeMB, timeAgoPL, autoTitle, copyText, downloadFile, escapeHtml,
+  fmtBytes, fmtSizeMB, timeAgo, autoTitle, copyText, downloadFile, escapeHtml,
 } from "./ui.js";
 
 let downloadHub = null;
@@ -43,27 +44,67 @@ const S = {
 };
 
 const STATUS_META = {
-  idle: "Oczekiwanie",
-  scan: "Wykrywanie sprzętu…",
-  download: "Pobieranie modelu",
-  load: "Ładowanie do pamięci…",
-  ready: "Gotowy do rozmowy",
-  generating: "Generowanie…",
-  error: "Błąd",
+  idle: "Idle",
+  scan: "Detecting hardware…",
+  download: "Downloading model",
+  load: "Loading into memory…",
+  ready: "Ready to chat",
+  generating: "Generating…",
+  error: "Error",
 };
 
-// ── Motyw / animacje ──────────────────────────────────────────
+const ACCENT_THEME_COLORS = {
+  violet: "#7c3aed",
+  ocean: "#0284c7",
+  rose: "#e11d48",
+  mint: "#059669",
+  amber: "#b45309",
+};
+
+// ── Theme / appearance ────────────────────────────────────────
 function applyTheme() {
   const t = S.settings.theme || "auto";
-  document.body.dataset.theme = t;
   if (t === "auto") {
     const dark = matchMedia("(prefers-color-scheme: dark)").matches;
     document.body.dataset.theme = dark ? "dark" : "light";
+  } else {
+    document.body.dataset.theme = t;
   }
 }
 
 function applyAnims() {
   document.body.classList.toggle("no-anim", !S.settings.animations);
+}
+
+/** Resolve Safe Mode: explicit on/off wins, "auto" follows the hardware probe. */
+function resolveSafeMode() {
+  const pref = S.settings.safeMode || "auto";
+  if (pref === "on") return true;
+  if (pref === "off") return false;
+  return S.hw ? isWeakDevice(S.hw) : false;
+}
+
+function applySafeMode() {
+  S.safeActive = resolveSafeMode();
+  document.body.classList.toggle("safe", S.safeActive);
+  $("#safe-banner").hidden = !S.safeActive;
+  downloadHub?.setLowFx(S.safeActive);
+}
+
+/** Apply every visual setting at once (theme, accent, bg, glass, font…). */
+function applyAppearance() {
+  const s = S.settings;
+  applyTheme();
+  applyAnims();
+  applySafeMode();
+  document.body.dataset.accent = ACCENTS[s.accent] ? s.accent : "violet";
+  document.body.dataset.bg = BG_STYLES[s.bgStyle] ? s.bgStyle : "aurora";
+  document.body.dataset.bubbles = BUBBLE_STYLES[s.bubbleStyle] ? s.bubbleStyle : "round";
+  document.body.classList.toggle("no-glass", !s.glass);
+  document.body.classList.toggle("no-avatars", !s.avatars);
+  document.documentElement.style.setProperty("--chat-font", `${s.fontSize || 15}px`);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = ACCENT_THEME_COLORS[document.body.dataset.accent] || "#7c3aed";
 }
 
 // ── Status ────────────────────────────────────────────────────
@@ -75,34 +116,47 @@ function setStatus(state, sub = "") {
 }
 
 function updateModelChip() {
-  const name = S.model ? S.model.name : "Wybierz model";
+  const name = S.model ? S.model.name : "Pick a model";
   $("#model-chip-name").textContent = name;
-  $("#model-cta").innerHTML = S.model
-    ? `<svg><use href="#i-chat"/></svg>Kontynuuj z ${escapeHtml(S.model.name)}`
-    : `<svg><use href="#i-spark"/></svg>Wybierz model i zacznij`;
+  const cta = $("#model-cta");
+  cta.innerHTML = "";
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", S.model ? "#i-chat" : "#i-spark");
+  svg.appendChild(use);
+  cta.append(svg, document.createTextNode(S.model ? `Continue with ${S.model.name}` : "Pick a model & start"));
+}
+
+/** How many recent messages to render (fewer in Safe Mode for weak GPUs). */
+function renderWindowSize() {
+  return S.safeActive ? LIMITS.renderWindowSafe : LIMITS.renderWindow;
 }
 
 // ── Boot ──────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", boot);
 
 async function boot() {
-  applyTheme();
-  applyAnims();
-  matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
-    if (S.settings.theme === "auto") applyTheme();
-  });
+  applyAppearance();
+  try {
+    const mq = matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => {
+      if (S.settings.theme === "auto") applyTheme();
+    };
+    if (typeof mq.addEventListener === "function") mq.addEventListener("change", onChange);
+    else if (typeof mq.addListener === "function") mq.addListener(onChange);
+  } catch { /* older browsers — ignore */ }
 
-  // Inicjalizacja Centrum Pobierania (Telemetria, gry, ciekawostki, dock)
+  // Download Hub init (telemetry, games, facts, dock)
   downloadHub = new DownloadHub({
     onMinimize: () => {
-      toast("Pobieranie trwa w tle (widżet na dole) — możesz swobodnie przeglądać czat i ustawienia! 🔍", "info", 4500);
+      toast("Downloading in the background (widget at the bottom) — feel free to browse chats and settings! 🔍", "info", 4500);
     },
     onExpand: () => {},
     onAbort: () => {
       S.proxy.abort();
       S.downloading = false;
-      // Odkolejkuj pytanie: usuń znacznik "⏳" i wróć tekst do pola
-      // wiadomości, żeby użytkownik mógł łatwo wysłać go ponownie.
+      // Dequeue the question: remove the "⏳" marker and put the text
+      // back into the message box so it's easy to resend.
       if (S.queuedPrompt) {
         const { text, placeholderNode } = S.queuedPrompt;
         S.queuedPrompt = null;
@@ -113,8 +167,8 @@ async function boot() {
           autogrow();
         }
       }
-      setStatus("idle", "pobieranie anulowane");
-      toast("Pobieranie przerwane — pytanie wróciło do pola, wyślij je ponownie", "warn", 5000);
+      setStatus("idle", "download cancelled");
+      toast("Download cancelled — your question is back in the box, send it again", "warn", 5000);
     },
     onUsePrompt: (promptText) => {
       const ta = $("#input");
@@ -122,7 +176,7 @@ async function boot() {
         ta.value = promptText;
         autogrow();
         ta.focus();
-        toast("Wklejono prompt do czatu! ✨", "ok");
+        toast("Prompt pasted into the chat! ✨", "ok");
       }
     },
     onQueuePrompt: (promptText) => {
@@ -130,54 +184,58 @@ async function boot() {
     },
   });
   S.downloadHub = downloadHub;
+  downloadHub.setLowFx(S.safeActive);
 
-  // Żądanie trwałego przechowywania (persistent storage)
+  // Request persistent storage
   if (navigator.storage?.persist) {
     navigator.storage.persist().catch(() => {});
   }
 
   bindUI();
-  renderSuggestions();
-  setStatus("idle", "przygotowanie…");
+  setStatus("idle", "preparing…");
   updateModelChip();
   updateOnlineUI();
   await refreshThreads();
 
-  // Przywróć ostatni wątek
+  // Restore the last thread
   const lastId = S.settings.lastThreadId;
   if (lastId && S.threads.some((t) => t.id === lastId)) {
     await openThread(lastId, { silent: true });
   }
 
-  // Sonda sprzętowa w tle (nie blokuje UI)
+  // Hardware probe in the background (never blocks the UI)
   setStatus("scan");
   probeHardware()
     .then((hw) => {
       S.hw = hw;
       S.rec = recommendModels(hw, MODEL_CATALOG, WASM_CATALOG);
+      applySafeMode();
+      if (S.safeActive && S.settings.safeMode === "auto") {
+        toast("Safe Mode enabled for your device — visuals simplified to protect the GPU 🛡️", "info", 5000);
+      }
       $("#hw-hint").textContent =
-        `${deviceSummary(hw)} · budżet ~${fmtBytes(S.rec.budgetMB)} · polecany: ${getModel(S.rec.recommended)?.name || "—"}`;
-      if (!S.model) setStatus("idle", "wybierz model");
+        `${deviceSummary(hw)} · budget ~${fmtBytes(S.rec.budgetMB)} · recommended: ${getModel(S.rec.recommended)?.name || "—"}`;
+      if (!S.model) setStatus("idle", "pick a model");
     })
     .catch(() => {
-      $("#hw-hint").textContent = "Nie udało się zbadać sprzętu — wybierz model ręcznie.";
+      $("#hw-hint").textContent = "Could not probe the hardware — please pick a model manually.";
       setStatus("idle");
     });
 
-  // Przywróć wybrany wcześniej model (bez auto-pobierania!)
+  // Restore the previously selected model (but never auto-download!)
   const savedKey = S.settings.modelKey;
   if (savedKey && getModel(savedKey)) {
     S.model = getModel(savedKey);
     updateModelChip();
     const wasDownloaded = !!S.settings.downloaded[savedKey];
     if (wasDownloaded) {
-      // Model w cache → spróbuj załadować automatycznie (szybko, offline OK).
+      // Model is cached → try loading automatically (fast, works offline).
       loadModel(savedKey, { auto: true }).catch(() => {});
     } else {
       setStatus("idle", S.model.name);
     }
   } else if (!S.settings.onboarded) {
-    // Pierwsze uruchomienie → onboarding po wykryciu sprzętu.
+    // First launch → onboarding once the hardware is known.
     const waitHw = setInterval(() => {
       if (S.hw) {
         clearInterval(waitHw);
@@ -198,7 +256,11 @@ function bindUI() {
   $("#btn-send").addEventListener("click", () => onSend());
   $("#btn-stop").addEventListener("click", stopGeneration);
   const input = $("#input");
-  input.addEventListener("input", autogrow);
+  input.addEventListener("input", () => {
+    autogrow();
+    // Glow the send button while there is something to send.
+    $("#btn-send").classList.toggle("ready", input.value.trim().length > 0);
+  });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && S.settings.sendOnEnter) {
       e.preventDefault();
@@ -212,10 +274,16 @@ function bindUI() {
     else openModelPicker();
   });
 
-  // Drawer
-  $("#btn-threads").addEventListener("click", openDrawer);
+  // Drawer — on desktop it collapses the side panel instead of sliding it
+  $("#btn-threads").addEventListener("click", () => {
+    if (window.innerWidth <= 900) openDrawer();
+    else document.body.classList.toggle("drawer-hidden");
+  });
   $("#btn-close-drawer").addEventListener("click", closeDrawer);
   $("#scrim").addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeDrawer();
+  });
   $("#btn-new-chat").addEventListener("click", () => { newChat(); closeDrawer(); });
   $("#thread-search").addEventListener("input", (e) => {
     S.threadFilter = e.target.value.toLowerCase();
@@ -226,6 +294,11 @@ function bindUI() {
   $("#import-file").addEventListener("change", onImportFile);
 
   $("#btn-settings").addEventListener("click", openSettings);
+  $("#btn-safe-off").addEventListener("click", () => {
+    S.settings = saveSettings({ safeMode: "off" });
+    applySafeMode();
+    toast("Safe Mode turned off", "info");
+  });
   $("#btn-install").addEventListener("click", installPWA);
   window.addEventListener("beforeinstallprompt", (e) => {
     e.preventDefault();
@@ -233,7 +306,7 @@ function bindUI() {
     $("#btn-install").hidden = false;
   });
 
-  // Wiadomości: scroll + delegacja klików
+  // Messages: scroll + click delegation
   const box = $("#messages");
   box.addEventListener("scroll", () => {
     S.nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
@@ -246,12 +319,15 @@ function bindUI() {
   window.addEventListener("online", updateOnlineUI);
   window.addEventListener("offline", updateOnlineUI);
   window.addEventListener("beforeunload", (e) => {
-    if (S.downloading || S.generating) e.preventDefault();
+    if (S.downloading || S.generating) {
+      e.preventDefault();
+      e.returnValue = ""; // required by Chrome to actually show the prompt
+    }
   });
 
   const pill = $("#status-pill");
   pill.style.cursor = "pointer";
-  pill.setAttribute("title", "Kliknij, aby zarządzać modelem lub postępem pobierania");
+  pill.setAttribute("title", "Click to manage the model or the download progress");
   pill.addEventListener("click", () => {
     if (S.downloading) {
       downloadHub?.expand();
@@ -271,22 +347,7 @@ function updateOnlineUI() {
   $("#offline-banner").hidden = navigator.onLine;
 }
 
-// ── Sugestie ──────────────────────────────────────────────────
-function renderSuggestions() {
-  const wrap = $("#suggestions");
-  wrap.innerHTML = "";
-  for (const p of SUGGESTED_PROMPTS) {
-    const b = el(`<button class="chip">💬 ${escapeHtml(p)}</button>`);
-    b.addEventListener("click", () => {
-      $("#input").value = p;
-      autogrow();
-      onSend();
-    });
-    wrap.appendChild(b);
-  }
-}
-
-// ── Drawer / wątki ────────────────────────────────────────────
+// ── Drawer / threads ────────────────────────────────────────────
 function openDrawer() {
   $("#drawer").classList.add("open");
   $("#scrim").hidden = false;
@@ -311,7 +372,7 @@ function renderThreadList() {
     .filter((t) => !S.threadFilter || t.title.toLowerCase().includes(S.threadFilter))
     .sort((a, b) => (b.pinned - a.pinned) || (b.updatedAt - a.updatedAt));
   if (!items.length) {
-    list.appendChild(el(`<div class="empty-threads">Brak rozmów.<br>Utwórz nową, aby zacząć. ✨</div>`));
+    list.appendChild(el(`<div class="empty-threads">No chats yet.<br>Create one to get started. ✨</div>`));
     return;
   }
   for (const t of items) {
@@ -319,12 +380,12 @@ function renderThreadList() {
       `<div class="thread ${t.id === S.activeId ? "active" : ""}">
         <div class="thread-main">
           <span class="thread-title">${t.pinned ? '<span class="pin-dot">📌 </span>' : ""}${escapeHtml(t.title)}</span>
-          <span class="thread-sub">${escapeHtml(t.modelKey ? getModel(t.modelKey)?.name || t.modelKey : "bez modelu")} · ${timeAgoPL(t.updatedAt)}</span>
+          <span class="thread-sub">${escapeHtml(t.modelKey ? getModel(t.modelKey)?.name || t.modelKey : "no model")} · ${timeAgo(t.updatedAt)}</span>
         </div>
         <div class="thread-acts">
-          <button class="icon-btn" data-act="pin" title="${t.pinned ? "Odepnij" : "Przypnij"}"><svg><use href="#i-pin"/></svg></button>
-          <button class="icon-btn" data-act="rename" title="Zmień nazwę"><svg><use href="#i-edit"/></svg></button>
-          <button class="icon-btn" data-act="del" title="Usuń"><svg><use href="#i-trash"/></svg></button>
+          <button class="icon-btn" data-act="pin" title="${t.pinned ? "Unpin" : "Pin"}"><svg><use href="#i-pin"/></svg></button>
+          <button class="icon-btn" data-act="rename" title="Rename"><svg><use href="#i-edit"/></svg></button>
+          <button class="icon-btn" data-act="del" title="Delete"><svg><use href="#i-trash"/></svg></button>
         </div>
       </div>`
     );
@@ -345,9 +406,9 @@ function renderThreadList() {
 async function threadAction(id, act) {
   if (act === "del") {
     const ok = await confirmDialog({
-      title: "Usunąć rozmowę?",
-      text: "Historia tej rozmowy zniknie z tego urządzenia bezpowrotnie.",
-      okLabel: "Usuń",
+      title: "Delete this chat?",
+      text: "This conversation will be gone from this device forever.",
+      okLabel: "Delete",
     });
     if (!ok) return;
     await Threads.remove(id);
@@ -357,18 +418,18 @@ async function threadAction(id, act) {
       updateWelcome();
     }
     await refreshThreads();
-    toast("Rozmowa usunięta", "ok");
+    toast("Chat deleted", "ok");
   } else if (act === "rename") {
     const t = S.threads.find((x) => x.id === id);
     const { close, body } = openModal({
-      title: "Zmień nazwę",
+      title: "Rename",
       html: `<div class="field"><input type="text" id="rn" maxlength="80" value="${escapeHtml(t?.title || "")}"></div>
-        <div class="row end gap"><button class="btn primary" id="rn-ok">Zapisz</button></div>`,
+        <div class="row end gap"><button class="btn primary" id="rn-ok">Save</button></div>`,
     });
     const inp = body.querySelector("#rn");
     inp.focus(); inp.select();
     body.querySelector("#rn-ok").addEventListener("click", async () => {
-      await Threads.update(id, { title: inp.value.trim() || "Rozmowa" });
+      await Threads.update(id, { title: inp.value.trim() || "Chat" });
       close();
       await refreshThreads();
     });
@@ -398,7 +459,7 @@ async function openThread(id, { silent = false } = {}) {
   scrollBottom(false);
 }
 
-// ── Renderowanie wiadomości ───────────────────────────────────
+// ── Rendering messages ────────────────────────────────────────
 function updateWelcome() {
   const has = $("#messages").children.length > 0;
   $("#welcome").style.display = has ? "none" : "flex";
@@ -412,16 +473,16 @@ function scrollBottom(smooth) {
 }
 
 function msgNode(role, innerHTML, statsText = "") {
-  // Uwaga: CSS styluje bąble asystenta pod klasą .msg.ai (nie .msg.assistant)
+  // Note: CSS styles assistant bubbles under .msg.ai (not .msg.assistant)
   const cls = role === "assistant" ? "ai" : role;
   const avatar = role === "user"
-    ? `<div class="msg-avatar">Ty</div>`
+    ? `<div class="msg-avatar">You</div>`
     : `<div class="msg-avatar"><img src="./icons/icon-192.png" alt="AI"></div>`;
   const node = el(
     `<div class="msg ${cls}">${avatar}<div class="bubble"><div class="content"></div>
       <div class="msg-foot">
-        <button class="icon-btn" data-act="copy" title="Kopiuj"><svg><use href="#i-copy"/></svg></button>
-        ${role === "assistant" ? `<button class="icon-btn" data-act="regen" title="Generuj ponownie"><svg><use href="#i-refresh"/></svg></button>` : ""}
+        <button class="icon-btn" data-act="copy" title="Copy"><svg><use href="#i-copy"/></svg></button>
+        ${role === "assistant" ? `<button class="icon-btn" data-act="regen" title="Regenerate"><svg><use href="#i-refresh"/></svg></button>` : ""}
         <small>${escapeHtml(statsText)}</small>
       </div></div></div>`
   );
@@ -432,9 +493,9 @@ function msgNode(role, innerHTML, statsText = "") {
 function statsLine(stats) {
   if (!stats) return "";
   const parts = [];
-  if (stats.tokPerSec) parts.push(`${String(stats.tokPerSec).replace(".", ",")} tok/s`);
-  if (stats.completionTokens) parts.push(`${stats.completionTokens} tok.`);
-  if (stats.ttftMs) parts.push(`start ${(stats.ttftMs / 1000).toFixed(1)}s`);
+  if (stats.tokPerSec) parts.push(`${stats.tokPerSec} tok/s`);
+  if (stats.completionTokens) parts.push(`${stats.completionTokens} tok`);
+  if (stats.ttftMs) parts.push(`first token ${(stats.ttftMs / 1000).toFixed(1)}s`);
   return parts.join(" · ");
 }
 
@@ -448,7 +509,7 @@ async function renderThread(resetWindow) {
   }
   const all = await Messages.list(S.activeId, 1000);
   const total = all.length;
-  const windowSize = resetWindow ? LIMITS.renderWindow : total;
+  const windowSize = resetWindow ? renderWindowSize() : total;
   const slice = all.slice(-windowSize);
   $("#load-more-wrap").hidden = total <= slice.length;
   for (const m of slice) {
@@ -468,8 +529,14 @@ async function renderThread(resetWindow) {
 function onMessagesClick(e) {
   const copyBtn = e.target.closest(".copy-code");
   if (copyBtn) {
-    copyText(decodeURIComponent(copyBtn.dataset.code || ""))
-      .then((ok) => toast(ok ? "Skopiowano kod" : "Nie udało się skopiować", ok ? "ok" : "error"));
+    let code = "";
+    try {
+      code = decodeURIComponent(copyBtn.dataset.code || "");
+    } catch {
+      code = copyBtn.dataset.code || "";
+    }
+    copyText(code)
+      .then((ok) => toast(ok ? "Code copied" : "Could not copy", ok ? "ok" : "error"));
     return;
   }
   const btn = e.target.closest(".msg-foot button");
@@ -477,17 +544,17 @@ function onMessagesClick(e) {
   const msgEl = e.target.closest(".msg");
   const raw = msgEl?.dataset.raw || msgEl?.querySelector(".content")?.textContent || "";
   if (btn.dataset.act === "copy") {
-    copyText(raw).then((ok) => toast(ok ? "Skopiowano" : "Nie udało się skopiować", ok ? "ok" : "error"));
+    copyText(raw).then((ok) => toast(ok ? "Copied" : "Could not copy", ok ? "ok" : "error"));
   } else if (btn.dataset.act === "regen") {
     regenerate();
   }
 }
 
-// ── Wysyłanie / generowanie ───────────────────────────────────
+// ── Sending / generating ──────────────────────────────────────
 async function queuePrompt(text) {
   if (!text || S.generating) return;
   if (!S.model) {
-    toast("Najpierw wybierz model AI", "warn");
+    toast("Pick an AI model first", "warn");
     return;
   }
   const ta = $("#input");
@@ -496,7 +563,7 @@ async function queuePrompt(text) {
     autogrow();
   }
 
-  // Upewnij się, że mamy wątek roboczy
+  // Make sure we have a working thread
   if (!S.activeId) {
     const t = await Threads.create({
       title: autoTitle(text),
@@ -509,7 +576,7 @@ async function queuePrompt(text) {
     await refreshThreads();
   } else {
     const t = S.threads.find((x) => x.id === S.activeId);
-    if (t && (t.title === "Nowa rozmowa" || !t.title)) {
+    if (t && (t.title === "New chat" || !t.title)) {
       await Threads.update(S.activeId, { title: autoTitle(text) });
       await refreshThreads();
     }
@@ -524,7 +591,7 @@ async function queuePrompt(text) {
 
   const qNode = msgNode(
     "assistant",
-    `<div class="queued-indicator">⏳ Model w trakcie pobierania (<span id="queued-dl-pct">0%</span>) — odpowiedź pojawi się automatycznie!</div>`,
+    `<div class="queued-indicator">⏳ Downloading the model (<span id="queued-dl-pct">0%</span>) — the answer will appear automatically!</div>`,
     ""
   );
   box.appendChild(qNode);
@@ -538,7 +605,7 @@ async function queuePrompt(text) {
     placeholderNode: qNode,
   };
 
-  toast("Wiadomość czeka w kolejce — wyśle się automatycznie po załadowaniu! 🚀", "ok", 4000);
+  toast("Message queued — it will be answered automatically once loaded! 🚀", "ok", 4000);
 }
 
 async function processQueuedPrompt() {
@@ -548,7 +615,7 @@ async function processQueuedPrompt() {
   if (placeholderNode && placeholderNode.parentNode) {
     placeholderNode.remove();
   }
-  toast("Model gotowy — generuję odpowiedź na Twoje pytanie… ✨", "ok");
+  toast("Model ready — generating the answer to your question… ✨", "ok");
   await generateReply();
 }
 
@@ -557,10 +624,10 @@ async function onSend() {
   const text = ta.value.trim();
   if (!text || S.generating) return;
 
-  // Trwa pobieranie:
-  //  - silnik jeszcze nie gotowy → kolejka (odpowiedź po załadowaniu),
-  //  - pobieramy INNY model niż aktywny → kolejka (odpowieź nowym modelem),
-  //  - ten sam model już działa w pamięci → odpowiadamy od razu.
+  // A download is in progress:
+  //  - engine not ready yet → queue (answer after loading),
+  //  - downloading a DIFFERENT model than the active one → queue (new model answers),
+  //  - the same model already runs in memory → answer right away.
   if (S.downloading) {
     const sameModelActive = S.engineLoaded && S.model && S.engineModelKey === S.model.key;
     if (!sameModelActive) {
@@ -573,8 +640,9 @@ async function onSend() {
 
   ta.value = "";
   autogrow();
+  $("#btn-send").classList.remove("ready");
 
-  // Wątek roboczy
+  // Working thread
   if (!S.activeId) {
     const t = await Threads.create({
       title: autoTitle(text),
@@ -585,7 +653,7 @@ async function onSend() {
     await refreshThreads();
   } else {
     const t = S.threads.find((x) => x.id === S.activeId);
-    if (t && (t.title === "Nowa rozmowa" || !t.title)) {
+    if (t && (t.title === "New chat" || !t.title)) {
       await Threads.update(S.activeId, { title: autoTitle(text) });
       await refreshThreads();
     }
@@ -626,8 +694,10 @@ async function generateReply() {
   $("#btn-send").disabled = true;
   $("#btn-stop").hidden = false;
   $("#progress-line").hidden = false;
+  // Pause background animation while the GPU is busy with inference.
+  document.body.classList.add("generating");
 
-  // Bąbel strumieniowy
+  // Streaming bubble
   const node = msgNode("assistant", `<span class="typing"><i></i><i></i><i></i></span>`, "");
   const content = node.querySelector(".content");
   box.appendChild(node);
@@ -658,10 +728,10 @@ async function generateReply() {
       topP: S.settings.topP,
       onToken: (delta) => {
         S.streamText += delta;
-        // licznik na żywo
+        // live counter
         const secs = (performance.now() - t0) / 1000;
         const toks = Math.ceil(S.streamText.length / 4);
-        $("#gen-stats").textContent = `${toks} tok. · ${(toks / Math.max(secs, 0.1)).toFixed(1).replace(".", ",")} tok/s`;
+        $("#gen-stats").textContent = `${toks} tok · ${(toks / Math.max(secs, 0.1)).toFixed(1)} tok/s`;
         paint(false);
       },
     });
@@ -680,8 +750,8 @@ async function generateReply() {
     node.dataset.raw = S.streamText;
     node.querySelector(".msg-foot small").textContent = statsLine(stats);
     $("#gen-stats").textContent = res.aborted
-      ? `Przerwano · ${statsLine(stats)}`
-      : `Gotowe w ${((performance.now() - t0) / 1000).toFixed(1).replace(".", ",")}s · ${statsLine(stats)}`;
+      ? `Stopped · ${statsLine(stats)}`
+      : `Done in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${statsLine(stats)}`;
 
     const fresh = await Messages.list(S.activeId, 1000);
     updateCtxInfo(fresh);
@@ -689,14 +759,19 @@ async function generateReply() {
     setStatus("ready", S.model.name + (navigator.onLine ? "" : " · offline"));
   } catch (e) {
     console.error(e);
-    content.innerHTML = `<p>⚠️ <strong>Nie udało się wygenerować odpowiedzi.</strong></p><p class="muted">${escapeHtml(friendlyError(e))}</p>`;
-    setStatus("error", "generowanie nieudane");
+    content.innerHTML = `<p>⚠️ <strong>Could not generate an answer.</strong></p><p class="muted">${escapeHtml(friendlyError(e))}</p>`;
+    setStatus("error", "generation failed");
     toast(friendlyError(e), "error", 5000);
-    setTimeout(() => {
-      if (S.engineLoaded) setStatus("ready", S.model?.name || "");
-    }, 4000);
+    if (isGpuError(e)) {
+      offerGpuRecovery();
+    } else {
+      setTimeout(() => {
+        if (S.engineLoaded) setStatus("ready", S.model?.name || "");
+      }, 4000);
+    }
   } finally {
     S.generating = false;
+    document.body.classList.remove("generating");
     $("#btn-send").disabled = false;
     $("#btn-stop").hidden = true;
     $("#progress-line").hidden = true;
@@ -707,7 +782,7 @@ async function generateReply() {
 async function stopGeneration() {
   if (!S.generating) return;
   await S.proxy.abort().catch(() => {});
-  toast("Zatrzymano generowanie", "info");
+  toast("Generation stopped", "info");
 }
 
 async function regenerate() {
@@ -715,53 +790,102 @@ async function regenerate() {
   if (!(await ensureEngine())) return;
   const removed = await Messages.removeLastAssistant(S.activeId);
   if (!removed) {
-    toast("Brak odpowiedzi do ponowienia", "warn");
+    toast("Nothing to regenerate", "warn");
     return;
   }
   await renderThread(false);
   await generateReply();
 }
 
+/** Did the GPU just crash (device lost / out of memory)? */
+function isGpuError(e) {
+  const m = String(e?.message || e || "");
+  return /device lost|lost device|out of memory|OOM|allocation failed|failed to allocate|webgpu/i.test(m);
+}
+
 function friendlyError(e) {
   const m = String(e?.message || e || "");
-  if (/memory|OOM|out of memory|allocation|device lost/i.test(m)) {
-    return "Za mało pamięci — zamknij inne karty i wybierz mniejszy model (np. SmolLM2 360M lub Qwen 0.5B).";
+  if (/device lost|lost device/i.test(m)) {
+    return "The GPU crashed (device lost) — the model was unloaded to protect the page. Enable Safe Mode and try a smaller model or the CPU mode.";
+  }
+  if (/memory|OOM|out of memory|allocation/i.test(m)) {
+    return "Out of memory — close other tabs and pick a smaller model (e.g. SmolLM2 360M or Qwen 0.5B), or enable Safe Mode.";
   }
   if (/webgpu|adapter/i.test(m)) {
-    return "Problem z WebGPU — odśwież stronę lub wybierz tryb zgodności (WASM).";
+    return "WebGPU trouble — reload the page or pick the compatibility (WASM) mode.";
   }
   if (/network|fetch|Failed to fetch|Load failed|resolve module|CORS|networkerror/i.test(m)) {
-    return "Problem z siecią — nie udało się pobrać modelu lub biblioteki silnika. Sprawdź połączenie (albo rozszerzenia blokujące) i spróbuj ponownie.";
+    return "Network trouble — the model or the engine library could not be downloaded. Check your connection (or blocking extensions) and retry.";
   }
-  if (/MODEL_NOT_FOUND|nie występuje/i.test(m)) return m;
-  if (/silnik (webllm|wasm) nie jest załadowany/i.test(m)) {
-    return "Silnik utracił model (np. po awarii karty graficznej) — otwórz listę i wybierz model ponownie.";
+  if (/MODEL_NOT_FOUND/i.test(m)) return m.replace("MODEL_NOT_FOUND: ", "");
+  if (/engine is not loaded/i.test(m)) {
+    return "The engine lost its model (e.g. after a GPU crash) — open the list and pick a model again.";
   }
   if (/context|Conversation exceeded/i.test(m)) {
-    return "Przekroczono okno kontekstu — zacznij nową rozmowę lub wyczyść historię.";
+    return "Context window exceeded — start a new chat or shorten the history.";
   }
   return m.length > 220 ? m.slice(0, 217) + "…" : m;
+}
+
+/** Recovery dialog after a GPU crash: Safe Mode, CPU model, or dismiss. */
+function offerGpuRecovery() {
+  const { close, body } = openModal({
+    title: "🛡️ GPU crash detected",
+    html: `<p class="muted">The graphics card ran out of memory or lost its context, so the model was unloaded.
+      Your chats are safe. Pick how to continue:</p>
+      <div class="warnline"><svg><use href="#i-warn"/></svg><span>Tip: Safe Mode simplifies visuals and caps memory, which prevents most mobile GPU crashes.</span></div>
+      <div class="row end gap" style="flex-wrap:wrap">
+        <button class="btn ghost" data-act="later">Later</button>
+        <button class="btn ghost" data-act="cpu">🐢 Use a CPU model</button>
+        <button class="btn primary" data-act="safe">🛡️ Safe Mode + small model</button>
+      </div>`,
+  });
+  body.querySelector('[data-act="later"]').addEventListener("click", () => {
+    close();
+    if (S.engineLoaded) setStatus("ready", S.model?.name || "");
+    else setStatus("idle", "pick a model");
+  });
+  body.querySelector('[data-act="cpu"]').addEventListener("click", async () => {
+    close();
+    await S.proxy.unload().catch(() => {});
+    S.engineLoaded = false;
+    S.engineModelKey = null;
+    setStatus("idle", "pick a model");
+    openModelPicker();
+    toast("Pick a model from the Compatibility (WASM) section", "info", 5000);
+  });
+  body.querySelector('[data-act="safe"]').addEventListener("click", async () => {
+    S.settings = saveSettings({ safeMode: "on" });
+    applySafeMode();
+    close();
+    await S.proxy.unload().catch(() => {});
+    S.engineLoaded = false;
+    S.engineModelKey = null;
+    setStatus("idle", "pick a model");
+    toast("Safe Mode is on — now pick one of the smallest models 🛡️", "ok", 5000);
+    openModelPicker();
+  });
 }
 
 function updateCtxInfo(allMessages) {
   const elInfo = $("#ctx-info");
   if (!S.model || !allMessages?.length) {
-    elInfo.textContent = S.model ? `Kontekst: ~${(S.model.ctx / 1024).toFixed(0)}k tokenów` : "";
+    elInfo.textContent = S.model ? `Context: ~${(S.model.ctx / 1024).toFixed(0)}k tokens` : "";
     return;
   }
   const used = estimateTokens(S.settings.systemPrompt) +
     allMessages.reduce((a, m) => a + estimateTokens(m.content) + 8, 0);
   const ctx = S.model.ctx || 4096;
   const pct = Math.min(999, Math.round((used / ctx) * 100));
-  elInfo.textContent = `Kontekst: ~${used} / ${ctx} tok. (${pct}%)`;
+  elInfo.textContent = `Context: ~${used} / ${ctx} tok (${pct}%)`;
 }
 
-// ── Silnik: zapewnienie / ładowanie ───────────────────────────
+// ── Engine: ensure / load ─────────────────────────────────────
 async function ensureEngine() {
   if (S.engineLoaded) return true;
   if (!S.model) {
     openModelPicker();
-    toast("Najpierw wybierz model AI", "info");
+    toast("Pick an AI model first", "info");
     return false;
   }
   try {
@@ -774,9 +898,9 @@ async function ensureEngine() {
 
 async function loadModel(key, { auto = false } = {}) {
   const model = getModel(key);
-  if (!model) throw new Error("Nieznany model.");
+  if (!model) throw new Error("Unknown model.");
   if (S.engineLoaded && S.engineModelKey === key) {
-    // Model już siedzi w pamięci — zero pracy, zero ponownego pobierania.
+    // The model already sits in memory — zero work, zero re-download.
     S.model = model;
     updateModelChip();
     if (!S.settings.onboarded) S.settings = saveSettings({ onboarded: true });
@@ -784,21 +908,21 @@ async function loadModel(key, { auto = false } = {}) {
     return;
   }
   if (S.downloading) {
-    toast("Trwa już ładowanie modelu…", "info");
+    toast("A model is already loading…", "info");
     downloadHub?.expand();
     return;
   }
   if (!S.hw) {
-    try { S.hw = await probeHardware(); } catch { /* dalej z fallbackiem */ }
+    try { S.hw = await probeHardware(); } catch { /* continue with the fallback */ }
   }
   const hw = S.hw || { mobile: true, ramGB: 4, webgpu: { supported: true, f16: false }, cores: 4 };
 
-  // Ostrzeżenie o danych mobilnych
-  if (!auto && S.settings.dataSaver === false && hw.connection?.saveData && !S.settings.downloaded[key]) {
-    toast("Tryb oszczędzania danych: pobieranie dużego modelu…", "warn", 5000);
+  // Mobile-data warning (only for fresh, large downloads)
+  if (!auto && hw.connection?.saveData && !S.settings.downloaded[key] && model.sizeMB > 500) {
+    toast("Data-saver mode is on: downloading a large model…", "warn", 5000);
   }
 
-  // Wymuszenie trwałego przechowywania (persistent storage)
+  // Ask for persistent storage
   if (navigator.storage?.persist) {
     navigator.storage.persist().catch(() => {});
   }
@@ -819,7 +943,7 @@ async function loadModel(key, { auto = false } = {}) {
 
   try {
     if (model.engine === "webllm") {
-      const ctx = suggestContextWindow(hw, model, S.settings.memorySaver);
+      const ctx = suggestContextWindow(hw, model, S.settings.ctxCap, S.safeActive);
       await S.proxy.loadWebLLM({
         modelId: model.modelId,
         cacheBackend: S.settings.cacheBackend || "cache",
@@ -843,7 +967,7 @@ async function loadModel(key, { auto = false } = {}) {
       downloaded: { ...S.settings.downloaded, [key]: { ts: Date.now(), bytes: model.sizeMB } },
     });
     setStatus("ready", model.name + (navigator.onLine ? "" : " · offline"));
-    toast(`Gotowy: ${model.name} — działa lokalnie${navigator.onLine ? "" : " (offline)"}`, "ok");
+    toast(`Ready: ${model.name} — running locally${navigator.onLine ? "" : " (offline)"}`, "ok");
     if (!S.settings.onboarded) S.settings = saveSettings({ onboarded: true });
 
     if (S.queuedPrompt) {
@@ -852,8 +976,12 @@ async function loadModel(key, { auto = false } = {}) {
   } catch (e) {
     console.error(e);
     S.engineLoaded = false;
-    setStatus("error", "ładowanie nieudane");
+    setStatus("error", "loading failed");
     toast(friendlyError(e), "error", 6000);
+    if (isGpuError(e)) {
+      // Give the hub a moment to close before showing recovery.
+      setTimeout(() => offerGpuRecovery(), 350);
+    }
     throw e;
   } finally {
     S.downloading = false;
@@ -861,51 +989,98 @@ async function loadModel(key, { auto = false } = {}) {
   }
 }
 
-// ── Onboarding / wybór modelu ─────────────────────────────────
+// ── Onboarding / model picker ─────────────────────────────────
 function starsHTML(n) {
   return "★".repeat(n) + "☆".repeat(5 - n);
 }
 
-function modelCardHTML(m, { recommended = false, fits = true, active = false } = {}) {
+function tagBadge(m) {
+  if (m.tag === "code") return `<span class="badge code">💻 Code</span>`;
+  if (m.tag === "reasoning") return `<span class="badge think">🧠 Thinks</span>`;
+  return "";
+}
+
+function modelCardHTML(m, idx, { recommended = false, fits = true, active = false } = {}) {
   const dl = S.settings.downloaded[m.key];
   const needPct = S.rec ? Math.min(100, Math.round((m.vramMB * 1.12 / S.rec.budgetMB) * 100)) : 0;
-  return `<div class="model-card ${recommended ? "recommended" : ""} ${active ? "active" : ""} ${!fits ? "dim" : ""}" data-key="${m.key}" data-size="${m.sizeMB}">
+  const tpsMax = Array.isArray(m.tps) ? m.tps[1] : 0;
+  return `<div class="model-card ${recommended ? "recommended" : ""} ${active ? "active" : ""} ${!fits ? "dim" : ""}" data-key="${m.key}" data-idx="${idx}" data-size="${m.sizeMB}" data-tps="${tpsMax}" data-quality="${m.quality || 0}">
     <div class="model-top">
       <strong>${escapeHtml(m.name)}</strong>
       <span class="params">${escapeHtml(m.params)}</span>
       <span class="model-badges">
-        ${recommended ? `<span class="badge rec">✨ Polecany</span>` : ""}
-        ${active ? `<span class="badge ok">● Aktywny</span>` : ""}
+        ${recommended ? `<span class="badge rec">✨ Recommended</span>` : ""}
+        ${active ? `<span class="badge ok">● Active</span>` : ""}
         ${dl ? `<span class="badge ok">📦 Offline</span>` : ""}
-        ${!fits ? `<span class="badge warnb">Duży na to urządzenie</span>` : ""}
+        ${tagBadge(m)}
+        ${!fits ? `<span class="badge warnb">Too big for this device</span>` : ""}
       </span>
     </div>
     <div class="model-desc">${escapeHtml(m.blurb)}</div>
     <div class="model-meta">
-      <span>🇵🇱 <span class="stars">${starsHTML(m.pl)}</span></span>
+      <span title="General answer quality">⭐ <span class="stars">${starsHTML(m.quality || 3)}</span></span>
+      <span class="tps" title="Estimated generation speed (phones land near the low end, desktop GPUs near the high end)">⚡ ~${escapeHtml(formatTps(m))}</span>
       <span>⬇️ <b>${fmtSizeMB(m.sizeMB)}</b></span>
-      ${m.estDl ? `<span class="badge-fast" title="Szacowany czas pobierania przy standardowym łączu">⚡ ${escapeHtml(m.estDl)}</span>` : ""}
+      ${m.estDl ? `<span class="badge-fast" title="Estimated download time on a standard connection">⏱️ ${escapeHtml(m.estDl)}</span>` : ""}
       <span>🧠 <b>${fmtBytes(m.vramMB)}</b></span>
       <span>📏 ${(m.ctx / 1024).toFixed(0)}k ctx</span>
-      ${m.needsF16 ? `<span title="Wymaga shader-f16">⚡F16</span>` : ""}
-      ${m.stable === false ? `<span title="Wariant eksperymentalny">🧪 exp</span>` : ""}
+      ${m.needsF16 ? `<span title="Needs shader-f16 (auto-switches to an f32 build when missing)">⚡F16</span>` : ""}
+      ${m.stable === false ? `<span title="Experimental variant">🧪 exp</span>` : ""}
     </div>
-    <div class="vram"><div class="bar"><i style="width:${needPct}%"></i></div><small>pamięć vs budżet</small></div>
+    <div class="vram"><div class="bar"><i style="width:${needPct}%"></i></div><small>memory vs budget</small></div>
     <button class="btn ${recommended && !active ? "primary" : "ghost"} sm" data-load="${m.key}">
-      <svg><use href="#${dl ? "i-bolt" : "i-download"}"/></svg>${dl ? "Uruchom z pamięci" : "Pobierz i uruchom"}
+      <svg><use href="#${dl ? "i-bolt" : "i-download"}"/></svg>${dl ? "Run from cache" : "Download & run"}
     </button>
   </div>`;
 }
 
-function catalogHTML(catalog, { showTiers = true } = {}) {
+/** Re-order model cards inside every grid (Recommended / Fastest / …). */
+function applyModelSort(body, mode) {
+  body.querySelectorAll(".model-grid").forEach((grid) => {
+    const cards = [...grid.querySelectorAll(".model-card")];
+    const val = (c, k) => Number(c.dataset[k] || 0);
+    cards.sort((a, b) => {
+      if (mode === "fastest") return val(b, "tps") - val(a, "tps");
+      if (mode === "smallest") return val(a, "size") - val(b, "size");
+      if (mode === "quality") return val(b, "quality") - val(a, "quality") || val(a, "size") - val(b, "size");
+      return val(a, "idx") - val(b, "idx");
+    });
+    for (const c of cards) grid.appendChild(c);
+  });
+}
+
+/** Confirm before loading a model that exceeds the memory budget. */
+async function confirmOversizeLoad(m) {
+  const fits = (S.rec?.ranked || []).find((r) => r.key === m.key)?.fits ?? true;
+  if (fits) return true;
+  return confirmDialog({
+    title: "⚠️ This model may crash your device",
+    text: `${m.name} needs ~${fmtBytes(m.vramMB)} but your safe budget is ~${fmtBytes(S.rec?.budgetMB || 0)}. ` +
+      "Loading it can freeze or crash the page, especially on phones. Load it anyway?",
+    okLabel: "Load anyway",
+    danger: true,
+  });
+}
+
+async function onPickModel(key, close) {
+  const m = getModel(key);
+  if (!m) return;
+  if (!(await confirmOversizeLoad(m))) return;
+  close?.();
+  if (!S.activeId) newChat();
+  loadModel(key).catch(() => {});
+}
+
+function catalogHTML(catalog) {
   const fitMap = new Map((S.rec?.ranked || []).map((r) => [r.key, r.fits]));
   const tiers = [...new Set(catalog.map((m) => m.tier))];
   let html = "";
+  let idx = 0;
   for (const tier of tiers) {
     const t = TIERS[tier] || { label: tier, desc: "" };
     html += `<div class="tier-title">${escapeHtml(t.label)}<small>${escapeHtml(t.desc)}</small></div><div class="model-grid">`;
     for (const m of catalog.filter((x) => x.tier === tier)) {
-      html += modelCardHTML(m, {
+      html += modelCardHTML(m, idx++, {
         recommended: S.rec?.recommended === m.key,
         fits: fitMap.get(m.key) ?? true,
         active: S.engineModelKey === m.key && S.engineLoaded,
@@ -913,20 +1088,19 @@ function catalogHTML(catalog, { showTiers = true } = {}) {
     }
     html += `</div>`;
   }
-  if (!showTiers) return html;
   return html;
 }
 
 function hwCardHTML() {
   if (!S.hw) {
-    return `<div class="hw-card">⏳ Badanie sprzętu trwało za długo — wybierz model ręcznie (dostępne też warianty WASM na dole listy).</div>`;
+    return `<div class="hw-card">⏳ Hardware probing is taking too long — pick a model manually (WASM variants are at the bottom of the list).</div>`;
   }
   const warns = (S.rec?.warnings || [])
     .map((w) => `<div class="warnline ${w.icon === "info" ? "info" : ""}"><svg><use href="#${w.icon === "info" ? "i-info" : "i-warn"}"/></svg><span>${escapeHtml(w.text)}</span></div>`)
     .join("");
   return `<div class="hw-card">
-      <div class="hw-line"><svg><use href="#i-cpu"/></svg><span><strong>Twoje urządzenie:</strong> ${escapeHtml(deviceSummary(S.hw))}</span></div>
-      <div class="hw-line"><svg><use href="#i-box"/></svg><span><strong>Budżet pamięci na model:</strong> ~${fmtBytes(S.rec?.budgetMB || 0)} (z marginesem bezpieczeństwa)</span></div>
+      <div class="hw-line"><svg><use href="#i-cpu"/></svg><span><strong>Your device:</strong> ${escapeHtml(deviceSummary(S.hw))}</span></div>
+      <div class="hw-line"><svg><use href="#i-box"/></svg><span><strong>Memory budget for a model:</strong> ~${fmtBytes(S.rec?.budgetMB || 0)} (with a safety margin)</span></div>
     </div>${warns}`;
 }
 
@@ -935,40 +1109,55 @@ function openOnboarding() {
   const isWasm = S.hw && !S.hw.webgpu.supported;
   const catalog = isWasm ? WASM_CATALOG : MODEL_CATALOG;
   const { close, body } = openModal({
-    title: "👋 Witaj w OffChat!",
+    title: "👋 Welcome to OffChat!",
     wide: true,
     dismissable: true,
-    html: `<p class="muted">Zbadaliśmy Twoje urządzenie i dobraliśmy modele, które <strong>bezpiecznie się na nim zmieszczą</strong>.
-      ${isWasm ? "Brak WebGPU — proponujemy lekkie modele CPU (WASM)." : "Wybierz jeden — pobierze się raz, a potem działa offline."}</p>
+    html: `<p class="muted">We checked your device and picked models that will <strong>fit it safely</strong>.
+      ${isWasm ? "No WebGPU — here are light CPU (WASM) models." : "Pick one — it downloads once, then works offline."}</p>
       ${hwCardHTML()}${catalogHTML(catalog)}`,
   });
   body.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-load]");
     if (!btn) return;
-    const key = btn.dataset.load;
-    close();
-    if (!S.activeId) newChat();
-    loadModel(key).catch(() => {});
+    onPickModel(btn.dataset.load, close);
   });
 }
 
 function openModelPicker() {
   const web = !S.hw || S.hw.webgpu.supported;
+  const fitMap = new Map((S.rec?.ranked || []).map((r) => [r.key, r.fits]));
+  const wasmCards = WASM_CATALOG.map((m, i) =>
+    modelCardHTML(m, 1000 + i, {
+      fits: web ? true : (fitMap.get(m.key) ?? true),
+      active: S.engineModelKey === m.key && S.engineLoaded,
+      recommended: !web && S.rec?.recommended === m.key,
+    })
+  ).join("");
   const { close, body } = openModal({
-    title: "🤖 Wybierz model AI",
+    title: "🤖 Pick an AI model",
     wide: true,
     html: `${hwCardHTML()}
-      <div class="filter-pills" id="model-filters">
-        <button class="filter-pill active" data-filter="all">Wszystkie</button>
-        <button class="filter-pill" data-filter="fast">⚡ Błyskawiczne (&lt; 500 MB)</button>
-        <button class="filter-pill" data-filter="mid">⚖️ Zrównoważone (0.5 – 2 GB)</button>
-        <button class="filter-pill" data-filter="max">💎 Desktop (&gt; 2 GB)</button>
+      <div class="model-toolbar">
+        <div class="filter-pills" id="model-filters">
+          <button class="filter-pill active" data-filter="all">All</button>
+          <button class="filter-pill" data-filter="fast">⚡ Instant (&lt; 500 MB)</button>
+          <button class="filter-pill" data-filter="mid">⚖️ Balanced (0.5 – 2 GB)</button>
+          <button class="filter-pill" data-filter="max">💎 Desktop (&gt; 2 GB)</button>
+        </div>
+        <label class="sort-wrap">Sort:
+          <select id="model-sort">
+            <option value="recommended">Recommended</option>
+            <option value="fastest">Fastest first</option>
+            <option value="smallest">Smallest first</option>
+            <option value="quality">Best quality</option>
+          </select>
+        </label>
       </div>
-      ${web ? catalogHTML(MODEL_CATALOG) : `<p class="muted">Brak WebGPU — dostępne modele CPU:</p>` + catalogHTML(WASM_CATALOG)}
-      ${web ? `<div class="tier-title">Tryb zgodności<small>Gdy WebGPU sprawia problemy — wolniejsze modele CPU (WASM)</small></div><div class="model-grid">${WASM_CATALOG.map((m) => modelCardHTML(m, { fits: true, active: S.engineModelKey === m.key && S.engineLoaded })).join("")}</div>` : ""}
+      ${web ? catalogHTML(MODEL_CATALOG) : `<p class="muted">No WebGPU — CPU models available:</p>` + catalogHTML(WASM_CATALOG)}
+      ${web ? `<div class="tier-title">Compatibility mode<small>If WebGPU misbehaves — slower CPU (WASM) models</small></div><div class="model-grid">${wasmCards}</div>` : ""}
       <div class="row end gap">
-        ${S.engineLoaded ? `<button class="btn ghost sm" id="m-unload">Wyłącz model z pamięci</button>` : ""}
-        <button class="btn ghost sm" id="m-close">Zamknij</button>
+        ${S.engineLoaded ? `<button class="btn ghost sm" id="m-unload">Unload model from memory</button>` : ""}
+        <button class="btn ghost sm" id="m-close">Close</button>
       </div>`,
   });
 
@@ -998,136 +1187,204 @@ function openModelPicker() {
     });
   });
 
+  body.querySelector("#model-sort")?.addEventListener("change", (e) => {
+    applyModelSort(body, e.target.value);
+  });
+
   body.querySelector("#m-close").addEventListener("click", close);
   body.querySelector("#m-unload")?.addEventListener("click", async () => {
     await S.proxy.unload().catch(() => {});
     S.engineLoaded = false;
     S.engineModelKey = null;
-    setStatus("idle", "model wyłączony");
-    toast("Model zwolniony z pamięci", "ok");
+    setStatus("idle", "model unloaded");
+    toast("Model released from memory", "ok");
     close();
   });
   body.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-load]");
     if (!btn || btn.id === "m-close" || btn.id === "m-unload") return;
-    const key = btn.dataset.load;
-    close();
-    loadModel(key).catch(() => {});
+    onPickModel(btn.dataset.load, close);
   });
 }
 
-// ── Ustawienia ────────────────────────────────────────────────
+// ── Settings ──────────────────────────────────────────────────
+function segHTML(id, options, current) {
+  return `<div class="seg wrap" id="${id}">` + options.map(([v, label]) =>
+    `<button data-v="${v}" class="${current === v ? "on" : ""}">${label}</button>`
+  ).join("") + `</div>`;
+}
+
 function openSettings() {
   const s = S.settings;
+  const accentBtns = Object.entries(ACCENTS).map(([key, a]) =>
+    `<button class="swatch ${s.accent === key ? "on" : ""}" data-v="${key}" title="${a.label}" aria-label="${a.label} accent" style="--sw:${a.swatch}"></button>`
+  ).join("");
   const { close, body } = openModal({
-    title: "⚙️ Ustawienia",
+    title: "⚙️ Settings",
     html: `
-    <div class="set-section">Wygląd</div>
-    <div class="seg" id="seg-theme">
-      <button data-v="auto" class="${s.theme === "auto" ? "on" : ""}">🌓 Auto</button>
-      <button data-v="light" class="${s.theme === "light" ? "on" : ""}"><svg><use href="#i-sun"/></svg>Jasny</button>
-      <button data-v="dark" class="${s.theme === "dark" ? "on" : ""}"><svg><use href="#i-moon"/></svg>Ciemny</button>
-    </div>
-    <div class="switch-row"><span>Animacje i efekty szklane<small>Wyłącz na bardzo słabych urządzeniach</small></span>
+    <div class="set-section">Appearance</div>
+    ${segHTML("seg-theme", [["auto", "🌓 Auto"], ["light", "☀️ Light"], ["dark", "🌙 Dark"]], s.theme)}
+    <div class="field"><span class="flabel">Accent color</span>
+      <div class="swatches" id="sw-accents">${accentBtns}</div></div>
+    <div class="field"><span class="flabel">Background</span>
+      ${segHTML("seg-bg", [["aurora", "🌌 Aurora"], ["tide", "🌊 Tide"], ["solid", "⬛ Solid"]], s.bgStyle)}</div>
+    <div class="switch-row"><span>Glass effect (blur)<small>Turn off on very weak devices — blur is heavy for GPUs</small></span>
+      <label class="switch"><input type="checkbox" id="sw-glass" ${s.glass ? "checked" : ""}><i></i></label></div>
+    <div class="switch-row"><span>Animations<small>Turn off on very weak devices</small></span>
       <label class="switch"><input type="checkbox" id="sw-anim" ${s.animations ? "checked" : ""}><i></i></label></div>
 
-    <div class="set-section">Generowanie</div>
-    <div class="field"><label>Temperatura (kreatywność) <output id="o-temp">${s.temperature.toFixed(2)}</output></label>
+    <div class="set-section">Chat look</div>
+    <div class="field"><label>Message font size <output id="o-font">${s.fontSize}px</output></label>
+      <input type="range" id="r-font" min="13" max="18" step="1" value="${s.fontSize}"></div>
+    <div class="field"><span class="flabel">Bubble shape</span>
+      ${segHTML("seg-bubbles", [["soft", "Soft"], ["round", "Round"], ["sharp", "Sharp"]], s.bubbleStyle)}</div>
+    <div class="switch-row"><span>Message avatars<small>Show icons next to messages</small></span>
+      <label class="switch"><input type="checkbox" id="sw-avatars" ${s.avatars ? "checked" : ""}><i></i></label></div>
+
+    <div class="set-section">Safety (weak GPUs)</div>
+    <div class="field"><span class="flabel">Safe Mode ${S.safeActive ? '<span class="badge ok">● active</span>' : ""}</span>
+      ${segHTML("seg-safe", [["auto", "🤖 Auto"], ["on", "🛡️ On"], ["off", "⚡ Off"]], s.safeMode)}
+      <small class="hint">Simplifies visuals, caps memory and warns before risky models. Recommended for weak phones.</small></div>
+    <div class="field"><label>Context window</label>
+      <select id="sel-ctx">
+        <option value="auto" ${s.ctxCap === "auto" ? "selected" : ""}>Auto (recommended)</option>
+        <option value="1024" ${s.ctxCap === "1024" ? "selected" : ""}>1024 tokens (safest)</option>
+        <option value="2048" ${s.ctxCap === "2048" ? "selected" : ""}>2048 tokens</option>
+        <option value="4096" ${s.ctxCap === "4096" ? "selected" : ""}>4096 tokens</option>
+        <option value="full" ${s.ctxCap === "full" ? "selected" : ""}>Full (model default)</option>
+      </select>
+      <small class="hint">Smaller context = less GPU memory = fewer crashes. Applies when a model loads.</small></div>
+
+    <div class="set-section">Generation</div>
+    <div class="field"><label>Temperature (creativity) <output id="o-temp">${s.temperature.toFixed(2)}</output></label>
       <input type="range" id="r-temp" min="0" max="1.5" step="0.05" value="${s.temperature}"></div>
     <div class="field"><label>Top-P <output id="o-topp">${s.topP.toFixed(2)}</output></label>
       <input type="range" id="r-topp" min="0.1" max="1" step="0.05" value="${s.topP}"></div>
-    <div class="field"><label>Maks. długość odpowiedzi <output id="o-max">${s.maxTokens} tok.</output></label>
+    <div class="field"><label>Max answer length <output id="o-max">${s.maxTokens} tok</output></label>
       <input type="range" id="r-max" min="64" max="2048" step="64" value="${s.maxTokens}"></div>
-    <div class="field"><label>Prompt systemowy (osobowość AI)</label>
+    <div class="field"><label>System prompt (AI personality)</label>
       <textarea id="t-sys" maxlength="2000">${escapeHtml(s.systemPrompt)}</textarea></div>
-    <div class="row end"><button class="btn ghost sm" id="btn-sys-reset">Przywróć domyślny prompt</button></div>
-    <div class="switch-row"><span>Enter wysyła wiadomość<small>Wyłączone: Enter to nowa linia</small></span>
+    <div class="row end"><button class="btn ghost sm" id="btn-sys-reset">Restore default prompt</button></div>
+    <div class="switch-row"><span>Enter sends the message<small>Off: Enter makes a new line</small></span>
       <label class="switch"><input type="checkbox" id="sw-enter" ${s.sendOnEnter ? "checked" : ""}><i></i></label></div>
 
-    <div class="set-section">Pamięć i offline</div>
-    <div class="switch-row"><span>Tryb oszczędzania pamięci<small>Skraca kontekst na telefonach — mniej ryzyka wysypania karty</small></span>
-      <label class="switch"><input type="checkbox" id="sw-mem" ${s.memorySaver ? "checked" : ""}><i></i></label></div>
-    <div class="field"><label>Magazyn wag modelu</label>
+    <div class="set-section">Memory & offline</div>
+    <div class="field"><label>Model weight storage</label>
       <select id="sel-cache">
-        <option value="cache" ${s.cacheBackend === "cache" ? "selected" : ""}>Cache API (zalecane, stabilne)</option>
-        <option value="opfs" ${s.cacheBackend === "opfs" ? "selected" : ""}>OPFS (eksperymentalne)</option>
+        <option value="cache" ${s.cacheBackend === "cache" ? "selected" : ""}>Cache API (recommended, stable)</option>
+        <option value="opfs" ${s.cacheBackend === "opfs" ? "selected" : ""}>OPFS (experimental)</option>
       </select></div>
     <div class="storage"><div class="bar"><i id="set-storage-bar"></i></div><small id="set-storage-text">…</small></div>
-    <div class="row gap"><button class="btn ghost sm grow" id="btn-clear-cache">🗑️ Wyczyść cache modeli</button></div>
+    <div class="row gap"><button class="btn ghost sm grow" id="btn-clear-cache">🗑️ Clear model cache</button></div>
 
-    <div class="set-section">Strefa niebezpieczna</div>
+    <div class="set-section">Danger zone</div>
     <div class="danger-zone">
       <div class="row gap">
-        <button class="btn danger sm grow" id="btn-wipe-chats">Usuń wszystkie rozmowy</button>
+        <button class="btn danger sm grow" id="btn-wipe-chats">Delete all chats</button>
       </div>
-      <small class="hint">Usuwa historię czatów z tego urządzenia. Wag modeli nie rusza.</small>
+      <small class="hint">Removes chat history from this device. Model weights are untouched.</small>
     </div>
 
-    <div class="set-section">O aplikacji</div>
-    <p class="hint">OffChat v${APP_VERSION} · silniki: WebLLM (WebGPU) + Transformers.js (WASM) ·
-    100% client-side, zero telemetrii. Wagi modeli: Hugging Face (cache lokalny).</p>`,
+    <div class="set-section">About</div>
+    <p class="hint">OffChat v${APP_VERSION} · engines: WebLLM (WebGPU) + Transformers.js (WASM) ·
+    100% client-side, zero telemetry. Model weights: Hugging Face (local cache).</p>`,
   });
 
-  const seg = body.querySelector("#seg-theme");
-  seg.addEventListener("click", (e) => {
-    const b = e.target.closest("button");
-    if (!b) return;
-    seg.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
-    b.classList.add("on");
-    S.settings = saveSettings({ theme: b.dataset.v });
-    applyTheme();
+  const bindSeg = (id, key, after) => {
+    const seg = body.querySelector(`#${id}`);
+    if (!seg) return;
+    seg.addEventListener("click", (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      seg.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
+      b.classList.add("on");
+      S.settings = saveSettings({ [key]: b.dataset.v });
+      after?.();
+    });
+  };
+  bindSeg("seg-theme", "theme", applyTheme);
+  bindSeg("seg-bg", "bgStyle", applyAppearance);
+  bindSeg("seg-bubbles", "bubbleStyle", applyAppearance);
+  bindSeg("seg-safe", "safeMode", () => {
+    applySafeMode();
+    toast(
+      S.safeActive ? "Safe Mode is on — visuals simplified 🛡️" : "Safe Mode is off",
+      "info"
+    );
   });
-  const bindRange = (id, out, fmt, key) => {
+  const swAcc = body.querySelector("#sw-accents");
+  swAcc?.addEventListener("click", (e) => {
+    const b = e.target.closest(".swatch");
+    if (!b) return;
+    swAcc.querySelectorAll(".swatch").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on");
+    S.settings = saveSettings({ accent: b.dataset.v });
+    applyAppearance();
+  });
+
+  const bindRange = (id, out, fmt, key, after) => {
     const r = body.querySelector(id);
+    if (!r) return;
     r.addEventListener("input", () => {
       body.querySelector(out).textContent = fmt(Number(r.value));
       S.settings = saveSettings({ [key]: Number(r.value) });
+      after?.();
     });
   };
   bindRange("#r-temp", "#o-temp", (v) => v.toFixed(2), "temperature");
   bindRange("#r-topp", "#o-topp", (v) => v.toFixed(2), "topP");
-  bindRange("#r-max", "#o-max", (v) => `${v} tok.`, "maxTokens");
+  bindRange("#r-max", "#o-max", (v) => `${v} tok`, "maxTokens");
+  bindRange("#r-font", "#o-font", (v) => `${v}px`, "fontSize", applyAppearance);
   body.querySelector("#t-sys").addEventListener("change", (e) => {
     S.settings = saveSettings({ systemPrompt: e.target.value.slice(0, 2000) || DEFAULT_SETTINGS.systemPrompt });
-    toast("Zapisano prompt systemowy", "ok");
+    toast("System prompt saved", "ok");
   });
   body.querySelector("#btn-sys-reset").addEventListener("click", () => {
     body.querySelector("#t-sys").value = DEFAULT_SETTINGS.systemPrompt;
     S.settings = saveSettings({ systemPrompt: DEFAULT_SETTINGS.systemPrompt });
+    toast("Default prompt restored", "ok");
   });
   body.querySelector("#sw-anim").addEventListener("change", (e) => {
     S.settings = saveSettings({ animations: e.target.checked });
     applyAnims();
   });
+  body.querySelector("#sw-glass").addEventListener("change", (e) => {
+    S.settings = saveSettings({ glass: e.target.checked });
+    applyAppearance();
+  });
+  body.querySelector("#sw-avatars").addEventListener("change", (e) => {
+    S.settings = saveSettings({ avatars: e.target.checked });
+    applyAppearance();
+  });
   body.querySelector("#sw-enter").addEventListener("change", (e) => {
     S.settings = saveSettings({ sendOnEnter: e.target.checked });
   });
-  body.querySelector("#sw-mem").addEventListener("change", (e) => {
-    S.settings = saveSettings({ memorySaver: e.target.checked });
-    toast("Zmiana kontekstu zadziała przy następnym ładowaniu modelu", "info");
+  body.querySelector("#sel-ctx").addEventListener("change", (e) => {
+    S.settings = saveSettings({ ctxCap: e.target.value });
+    toast("The new context size applies when a model loads", "info");
   });
   body.querySelector("#sel-cache").addEventListener("change", (e) => {
     S.settings = saveSettings({ cacheBackend: e.target.value });
-    toast("Zmiana magazynu zadziała przy następnym pobieraniu modelu", "info");
+    toast("The new storage applies to the next model download", "info");
   });
   body.querySelector("#btn-clear-cache").addEventListener("click", async () => {
     const ok = await confirmDialog({
-      title: "Wyczyścić cache modeli?",
-      text: "Usunie pobrane wagi (setki MB). Przy następnym uruchomieniu model pobierze się od nowa.",
-      okLabel: "Wyczyść",
+      title: "Clear the model cache?",
+      text: "This removes downloaded weights (hundreds of MB). The model will download again on next launch.",
+      okLabel: "Clear",
     });
     if (!ok) return;
     const n = await clearModelCaches();
     S.settings = saveSettings({ downloaded: {} });
-    toast(`Wyczyszczono ${n} magazynów modeli`, "ok");
+    toast(`Cleared ${n} model stores`, "ok");
     refreshStorageBar();
     paintSettingsStorage(body);
   });
   body.querySelector("#btn-wipe-chats").addEventListener("click", async () => {
     const ok = await confirmDialog({
-      title: "Usunąć WSZYSTKIE rozmowy?",
-      text: "Tej operacji nie da się cofnąć. Rozważ najpierw Eksport.",
-      okLabel: "Usuń wszystko",
+      title: "Delete ALL chats?",
+      text: "This cannot be undone. Consider Export first.",
+      okLabel: "Delete everything",
     });
     if (!ok) return;
     await Threads.clearAll();
@@ -1135,7 +1392,7 @@ function openSettings() {
     $("#messages").innerHTML = "";
     updateWelcome();
     await refreshThreads();
-    toast("Usunięto wszystkie rozmowy", "ok");
+    toast("All chats deleted", "ok");
     close();
   });
   paintSettingsStorage(body);
@@ -1149,9 +1406,9 @@ async function paintSettingsStorage(body) {
     const txt = body.querySelector("#set-storage-text");
     if (bar) bar.style.width = `${pct}%`;
     if (txt) {
-      txt.textContent = `Użyte: ${fmtBytes(info.usageMB)} z ${fmtBytes(info.quotaMB)} · cache: ${info.caches.length}`;
+      txt.textContent = `Used: ${fmtBytes(info.usageMB)} of ${fmtBytes(info.quotaMB)} · caches: ${info.caches.length}`;
     }
-  } catch { /* ignoruj */ }
+  } catch { /* ignore */ }
 }
 
 async function refreshStorageBar() {
@@ -1159,24 +1416,24 @@ async function refreshStorageBar() {
     const info = await storageInfo();
     const pct = info.quotaMB ? Math.min(100, Math.round((info.usageMB / info.quotaMB) * 100)) : 0;
     $("#storage-bar").style.width = `${pct}%`;
-    $("#storage-text").textContent = `Pamięć: ${fmtBytes(info.usageMB)} / ${fmtBytes(info.quotaMB)}`;
+    $("#storage-text").textContent = `Storage: ${fmtBytes(info.usageMB)} / ${fmtBytes(info.quotaMB)}`;
   } catch {
-    $("#storage-text").textContent = "Pamięć: niedostępna";
+    $("#storage-text").textContent = "Storage: unavailable";
   }
 }
 
-// ── Eksport / import ──────────────────────────────────────────
+// ── Export / import ───────────────────────────────────────────
 async function onExport() {
   try {
     const bundle = await exportAll(S.settings);
     downloadFile(
-      `offchat-eksport-${new Date().toISOString().slice(0, 10)}.json`,
+      `offchat-export-${new Date().toISOString().slice(0, 10)}.json`,
       JSON.stringify(bundle),
       "application/json"
     );
-    toast(`Wyeksportowano ${bundle.threads.length} rozmów`, "ok");
+    toast(`Exported ${bundle.threads.length} chats`, "ok");
   } catch (e) {
-    toast("Eksport nieudany: " + e.message, "error");
+    toast("Export failed: " + e.message, "error");
   }
 }
 
@@ -1188,16 +1445,16 @@ async function onImportFile(e) {
     const bundle = JSON.parse(await f.text());
     const n = await importAll(bundle);
     await refreshThreads();
-    toast(`Zaimportowano ${n} rozmów`, "ok");
+    toast(`Imported ${n} chats`, "ok");
   } catch {
-    toast("Nieprawidłowy plik eksportu", "error");
+    toast("Invalid export file", "error");
   }
 }
 
 // ── PWA / SW ──────────────────────────────────────────────────
 async function installPWA() {
   if (!S.installEvt) {
-    toast("Instalacja niedostępna w tej przeglądarce", "warn");
+    toast("Installation is not available in this browser", "warn");
     return;
   }
   S.installEvt.prompt();
@@ -1208,7 +1465,7 @@ async function installPWA() {
 
 async function registerSW() {
   if (!("serviceWorker" in navigator)) return;
-  // Service Worker wymaga http(s) — na file:// po prostu go pomiń.
+  // Service Worker needs http(s) — on file:// just skip it.
   if (!/^https?:$/.test(location.protocol)) return;
   try {
     const reg = await navigator.serviceWorker.register("./sw.js", { scope: "./" });
@@ -1216,11 +1473,11 @@ async function registerSW() {
       const w = reg.installing;
       w?.addEventListener("statechange", () => {
         if (w.state === "installed" && navigator.serviceWorker.controller) {
-          toast("Dostępna nowa wersja OffChat — odśwież stronę ✨", "info", 6000);
+          toast("A new OffChat version is available — reload the page ✨", "info", 6000);
         }
       });
     });
   } catch (e) {
-    console.warn("SW niedostępny:", e);
+    console.warn("SW unavailable:", e);
   }
 }

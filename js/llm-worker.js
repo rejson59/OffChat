@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────
-// OffChat · llm-worker.js — Web Worker odgradzający UI od inference.
-// Ciężkie obliczenia i streaming tokenów dzieją się poza wątkiem głównym,
-// dzięki czemu animacje i pisanie pozostają płynne nawet na słabych tel.
-// Protokół: { reqId, cmd, payload } → { reqId, event, data }.
+// OffChat · llm-worker.js — Web Worker shielding the UI from inference.
+// Heavy compute and token streaming happen off the main thread,
+// keeping animations and typing smooth even on weak phones.
+// Protocol: { reqId, cmd, payload } → { reqId, event, data }.
 // ─────────────────────────────────────────────────────────────
 import { Engine } from "./engine.js";
 
@@ -65,11 +65,11 @@ onmessage = async (e) => {
         break;
 
       default:
-        post(reqId, "error", { message: `Nieznana komenda: ${cmd}` });
+        post(reqId, "error", { message: `Unknown command: ${cmd}` });
     }
   } catch (err) {
     post(reqId, "error", {
-      message: String(err?.message || err || "Nieznany błąd silnika"),
+      message: String(err?.message || err || "Unknown engine error"),
     });
   }
 };

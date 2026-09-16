@@ -1,184 +1,184 @@
 // ─────────────────────────────────────────────────────────────
-// OffChat · download-hub.js — Centrum pobierania modeli AI:
-// 1) Dokładna telemetria w czasie rzeczywistym (MB/s, ETA, pobrano MB)
-// 2) Pływający mini-widżet ("Rozejrzyj się po aplikacji w trakcie pobierania")
-// 3) Kolejkowanie wiadomości w trakcie pobierania
-// 4) Mini-gra "NeuroPong" (zbieranie tokenów AI, fizyka 60fps, dźwięki)
-// 5) Ciekawostki o AI i modelach językowych (baza wiedzy PL)
-// 6) Szablony promptów z natychmiastowym użyciem w czacie
+// OffChat · download-hub.js — AI model download hub:
+// 1) Precise real-time telemetry (MB/s, ETA, downloaded MB)
+// 2) Floating mini-widget ("explore the app while downloading")
+// 3) Message queueing while downloading
+// 4) "NeuroPong" mini-game (AI token collecting, 60fps physics, sounds)
+// 5) AI & language-model facts (built-in knowledge base)
+// 6) Prompt templates with instant use in chat
 // ─────────────────────────────────────────────────────────────
 
 export const AI_TRIVIA = [
   {
-    title: "100% Prywatności na Twoim urządzeniu",
-    tag: "Prywatność",
+    title: "100% privacy on your device",
+    tag: "Privacy",
     icon: "🛡️",
-    text: "OffChat wykonuje wszystkie obliczenia wyłącznie na Twoim procesorze graficznym lub CPU. Twoje zapytania i odpowiedzi nigdy nie opuszczają przeglądarki i nie są wysyłane do żadnej chmury ani telemetrii.",
+    text: "OffChat runs every computation on your GPU or CPU only. Your prompts and answers never leave the browser and are never sent to any cloud or telemetry service.",
   },
   {
-    title: "Jak działa kwantyzacja 4-bitowa (q4f16)?",
-    tag: "Optymalizacja",
+    title: "How 4-bit quantization (q4f16) works",
+    tag: "Optimization",
     icon: "⚡",
-    text: "Oryginalne wagi modeli ważą 16 bitów na parametr. Kwantyzacja kompresuje je do zaledwie 4 bitów — dzięki temu model 3 mld parametrów zajmuje ~2 GB zamiast 6 GB pamięci VRAM, zachowując niemal 99% swojej inteligencji!",
+    text: "Original model weights use 16 bits per parameter. Quantization squeezes them down to just 4 bits — so a 3B model takes ~2 GB of VRAM instead of 6 GB while keeping almost 99% of its smarts!",
   },
   {
-    title: "WebGPU — rewolucja w przeglądarce",
-    tag: "Technologia",
+    title: "WebGPU — a revolution in the browser",
+    tag: "Technology",
     icon: "🚀",
-    text: "WebGPU to nowoczesny standard W3C dający przeglądarce bezpośredni, niskopoziomowy dostęp do Twojej karty graficznej poprzez Vulkan, Metal lub DirectX 12 — z niemal zerowym narzutem wydajnościowym.",
+    text: "WebGPU is a modern W3C standard giving the browser direct, low-level access to your graphics card through Vulkan, Metal or DirectX 12 — with near-zero performance overhead.",
   },
   {
-    title: "Czym właściwie są tokeny?",
-    tag: "Architektura",
+    title: "What exactly are tokens?",
+    tag: "Architecture",
     icon: "🔤",
-    text: "Modele językowe nie operują na literach ani całych słowach, lecz na tokenach (fragmentach wyrazów). W języku polskim 1 token to średnio około 3-4 litery, a słowo 'przeglądarka' składa się zwykle z 2 lub 3 tokenów.",
+    text: "Language models don't operate on letters or whole words, but on tokens (word fragments). In English, 1 token averages about 4 characters, so the word 'unbelievable' is usually 2 or 3 tokens.",
   },
   {
-    title: "Małe modele SLM kontra giganty",
-    tag: "Trendy AI",
+    title: "Small SLMs vs. giant models",
+    tag: "AI trends",
     icon: "💡",
-    text: "Jeszcze niedawno sądzono, że do logicznego rozumowania potrzeba setek miliardów parametrów. Nowoczesne modele SLM (0.5B – 3B), trenowane na starannie wyselekcjonowanych danych, potrafią to samo w ułamku sekundy na telefonie.",
+    text: "Not long ago everyone believed logical reasoning needed hundreds of billions of parameters. Modern SLMs (0.5B–3B), trained on carefully curated data, do the same in a fraction of a second on a phone.",
   },
   {
-    title: "Dlaczego rodzina Qwen tak dobrze zna polski?",
-    tag: "Język polski",
-    icon: "🇵🇱",
-    text: "Modele z rodziny Qwen (Alibaba) posiadają wyjątkowo bogaty wielojęzyczny zbiór treningowy. Dzięki temu nawet miniaturowy wariant Qwen 2.5 0.5B zachwyca płynną gramatyką i bogatym słownictwem w języku polskim.",
+    title: "Why small models speak so many languages",
+    tag: "Languages",
+    icon: "🌍",
+    text: "Model families like Qwen are trained on huge multilingual datasets. That's why even a tiny 0.5B model can chat fluently in dozens of languages — just write to it in yours.",
   },
   {
-    title: "KV-Cache: pamięć podręczna kontekstu",
-    tag: "Wydajność",
+    title: "KV-Cache: the context memory",
+    tag: "Performance",
     icon: "🧠",
-    text: "Gdy model generuje kolejne słowo, nie przelicza od nowa całej dotychczasowej rozmowy. W pamięci VRAM trzyma tzw. KV Cache (klucze i wartości), dzięki czemu każde nowe słowo powstaje z taką samą, błyskawiczną prędkością.",
+    text: "When a model generates the next word, it doesn't recompute the whole conversation. It keeps a KV Cache (keys and values) in VRAM, so every new word arrives at the same brisk speed.",
   },
   {
-    title: "Kompilacja shaderów WebGPU",
-    tag: "Sprzęt",
+    title: "Compiling WebGPU shaders",
+    tag: "Hardware",
     icon: "⚙️",
-    text: "Status 'Ładowanie do pamięci' oznacza, że przeglądarka kompiluje kod WGSL wprost na mikroinstrukcje Twojej konkretnej karty graficznej (Nvidia, AMD, Intel, Apple Silicon czy Qualcomm Adreno).",
+    text: "The 'Loading into memory' status means the browser is compiling WGSL code into micro-instructions for your exact graphics card (Nvidia, AMD, Intel, Apple Silicon or Qualcomm Adreno).",
   },
   {
-    title: "Temperatura i kreatywność",
-    tag: "Ustawienia",
+    title: "Temperature and creativity",
+    tag: "Settings",
     icon: "🌡️",
-    text: "Temperatura (np. 0.7) steruje stopniem losowości przy doborze kolejnych tokenów. Niska (0.2) daje odpowiedzi powtarzalne i ścisłe (kod, fakty), a wyższa (0.8) sprzyja poezji, metaforom i nieszablonowym pomysłom.",
+    text: "Temperature (e.g. 0.7) controls randomness when picking the next token. Low (0.2) gives repeatable, precise answers (code, facts), while higher (0.8) favors poetry, metaphors and wild ideas.",
   },
   {
-    title: "Działa w samolocie i bez zasięgu",
+    title: "Works on a plane with no signal",
     tag: "Offline",
     icon: "✈️",
-    text: "Gdy model raz pobierze się do pamięci przeglądarki (Cache API), OffChat działa całkowicie offline. Możesz przejść w tryb samolotowy i pisać z asystentem w pociągu, w tunelu czy na bezludnej wyspie.",
+    text: "Once a model lands in the browser cache (Cache API), OffChat works fully offline. Switch on airplane mode and chat with your assistant on a train, in a tunnel or on a desert island.",
   },
   {
-    title: "Mechanizm uwagi (Self-Attention)",
-    tag: "Historia AI",
+    title: "The attention mechanism",
+    tag: "AI history",
     icon: "👁️",
-    text: "Zaprezentowana w 2017 roku zasada Attention pozwala modelowi analizować relacje między wszystkimi słowami w zdaniu naraz — w przeciwieństwie do starych sieci RNN, które gubiły początek dłuższego tekstu.",
+    text: "Introduced in 2017, self-attention lets a model weigh relationships between all words in a sentence at once — unlike old RNN networks that forgot the start of longer texts.",
   },
   {
-    title: "Dlaczego AI czasami konfabuluje (halucynuje)?",
-    tag: "Wiedza",
+    title: "Why does AI sometimes hallucinate?",
+    tag: "Knowledge",
     icon: "🔍",
-    text: "Model nie posiada świadomości ani 'wiedzy' w ludzkim rozumieniu — to potężny model statystyczny, który dopełnia tekst najbardziej prawdopodobnymi słowami. Dlatego przy kluczowych faktach zawsze warto zachować czujność.",
+    text: "A model has no consciousness or 'knowledge' in the human sense — it's a powerful statistical engine completing text with the most likely words. Stay skeptical about critical facts.",
   },
   {
-    title: "Magiczna zasada: 'Pomyśl krok po kroku'",
+    title: "The magic phrase: 'think step by step'",
     tag: "Prompting",
     icon: "🪜",
-    text: "Dodanie do pytania zwrotu 'Pomyśl krok po kroku' zmusza mały model do wygenerowania łańcucha myśli (Chain of Thought), co drastycznie podnosi trafność odpowiedzi w zadaniach logicznych i matematycznych.",
+    text: "Adding 'think step by step' to your question forces a small model to generate a chain of thought, which dramatically improves accuracy on logic and math tasks.",
   },
   {
-    title: "Okno kontekstu 4096 tokenów",
-    tag: "Pojemność",
+    title: "A 4096-token context window",
+    tag: "Capacity",
     icon: "📚",
-    text: "Okno 4k tokenów mieści około 3000 polskich słów, co odpowiada 6–8 stronom maszynopisu. W tym oknie model pamięta całą dotychczasową wymianę zdań z danego wątku.",
+    text: "A 4k-token window holds roughly 3,000 English words — about 6–8 typed pages. Inside it, the model remembers the entire conversation of the current thread.",
   },
   {
-    title: "Ekologia lokalnego wnioskowania",
-    tag: "Środowisko",
+    title: "The ecology of local inference",
+    tag: "Environment",
     icon: "🌱",
-    text: "Wnioskowanie lokalne zużywa ułamek energii w porównaniu do zapytań do chmury, które angażują serwery hyperscalerów, chłodzenie wodne i transfer przez setki węzłów sieciowych.",
+    text: "Local inference uses a fraction of the energy of cloud queries, which spin up hyperscaler servers, water cooling and transfers across hundreds of network hops.",
   },
   {
-    title: "Trwałość dzięki Persistent Storage API",
-    tag: "Przeglądarka",
+    title: "Persistence via the Storage API",
+    tag: "Browser",
     icon: "💾",
-    text: "OffChat automatycznie prosi przeglądarkę o trwały magazyn (persistent storage), chroniąc pobrane gigabajty wag przed automatycznym czyszczeniem przy małej ilości miejsca na dysku.",
+    text: "OffChat automatically asks the browser for persistent storage, protecting downloaded gigabytes of weights from automatic cleanup when disk space runs low.",
   },
 ];
 
 export const PROMPT_TEMPLATES = [
   {
-    category: "✍️ Styl & Tekst",
-    title: "Korekta i wygładzenie tekstu",
-    desc: "Usuwa błędy i powtórzenia zachowując Twój głos.",
-    prompt: "Popraw styl, błędy interpunkcyjne i gramatyczne w poniższym tekście, zachowując mój naturalny ton wypowiedzi:\n\n[wklej tutaj tekst]",
+    category: "✍️ Style & Text",
+    title: "Proofread and polish",
+    desc: "Removes mistakes and repetition while keeping your voice.",
+    prompt: "Fix the style, punctuation and grammar in the text below, keeping my natural tone of voice:\n\n[paste your text here]",
   },
   {
-    category: "✍️ Styl & Tekst",
-    title: "Maksymalna zwięzłość (TL;DR)",
-    desc: "Wyciąga sedno i wypisuje 3 kluczowe punkty.",
-    prompt: "Przeredaguj poniższy tekst tak, aby był maksymalnie konkretny, przejrzysty i pozbawiony lania wody. Wypisz 3 najważniejsze wnioski w punktach:\n\n[wklej tekst]",
+    category: "✍️ Style & Text",
+    title: "Maximum brevity (TL;DR)",
+    desc: "Extracts the essence and lists 3 key points.",
+    prompt: "Rewrite the text below to be maximally concrete, clear and free of fluff. List the 3 most important takeaways as bullet points:\n\n[paste the text]",
   },
   {
-    category: "✍️ Styl & Tekst",
-    title: "Profesjonalny e-mail biznesowy",
-    desc: "Kulturalny, elegancki mail z jasnym kolejnym krokiem.",
-    prompt: "Napisz oficjalny, uprzejmy e-mail biznesowy w sprawie: [opisz cel wiadomości]. Użyj profesjonalnego tonu i wyraźnego zakończenia z propozycją kolejnego kroku.",
+    category: "✍️ Style & Text",
+    title: "Professional business e-mail",
+    desc: "Polite, elegant mail with a clear next step.",
+    prompt: "Write a formal, polite business e-mail about: [describe the goal of the message]. Use a professional tone and a clear closing with a proposed next step.",
   },
   {
-    category: "💻 Kod & Tech",
-    title: "Wyjaśnienie kodu krok po kroku",
-    desc: "Tłumaczy algorytm i wskazuje ewentualne pułapki.",
-    prompt: "Wyjaśnij mi krok po kroku działanie poniższego kodu, jakbyś uczył początkującego programistę. Wskaż ewentualne pułapki i błędy:\n\n```\n[wklej kod]\n```",
+    category: "💻 Code & Tech",
+    title: "Explain code step by step",
+    desc: "Explains the algorithm and spots potential pitfalls.",
+    prompt: "Explain step by step how the code below works, as if teaching a beginner programmer. Point out potential pitfalls and bugs:\n\n```\n[paste the code]\n```",
   },
   {
-    category: "💻 Kod & Tech",
-    title: "Optymalizacja wydajności",
-    desc: "Przyspiesza wykonanie i redukuje pamięć.",
-    prompt: "Zoptymalizuj poniższy kod pod kątem wydajności i czytelności. Wyjaśnij, co zostało zmienione i dlaczego:\n\n```\n[wklej kod]\n```",
+    category: "💻 Code & Tech",
+    title: "Performance optimization",
+    desc: "Speeds up execution and reduces memory use.",
+    prompt: "Optimize the code below for performance and readability. Explain what was changed and why:\n\n```\n[paste the code]\n```",
   },
   {
-    category: "💻 Kod & Tech",
-    title: "Generowanie testów jednostkowych",
-    desc: "Tworzy scenariusze testowe i przypadki brzegowe.",
-    prompt: "Napisz zestaw testów jednostkowych dla poniższej funkcji, uwzględniając przypadki brzegowe (edge cases):\n\n```\n[wklej kod]\n```",
+    category: "💻 Code & Tech",
+    title: "Generate unit tests",
+    desc: "Creates test scenarios including edge cases.",
+    prompt: "Write a set of unit tests for the function below, including edge cases:\n\n```\n[paste the code]\n```",
   },
   {
-    category: "🎓 Nauka & Zrozumienie",
-    title: "Metoda Feynmana (Jak dla 12-latka)",
-    desc: "Tłumaczy trudne pojęcie prostymi analogiami.",
-    prompt: "Wytłumacz mi pojęcie [wpisz temat, np. inflacja / czarne dziury / kwantyzacja] prostym językiem, używając barwnych życiowych analogii i unikając żargonu.",
+    category: "🎓 Learning",
+    title: "Feynman method (like I'm 12)",
+    desc: "Explains a hard concept with simple analogies.",
+    prompt: "Explain the concept of [enter a topic, e.g. inflation / black holes / quantization] in simple language, using vivid everyday analogies and avoiding jargon.",
   },
   {
-    category: "🎓 Nauka & Zrozumienie",
-    title: "Quiz sprawdzający wiedzę",
-    desc: "5 pytań testowych A/B/C/D z kluczem odpowiedzi.",
-    prompt: "Stwórz dla mnie 5 ciekawych pytań testowych z odpowiedziami A, B, C, D na temat: [wpisz temat]. Na samym końcu podaj klucz odpowiedzi z krótkim uzasadnieniem.",
+    category: "🎓 Learning",
+    title: "Knowledge-check quiz",
+    desc: "5 A/B/C/D test questions with an answer key.",
+    prompt: "Create 5 interesting multiple-choice questions (A, B, C, D) about: [enter a topic]. At the very end, give the answer key with a short justification.",
   },
   {
-    category: "🎓 Nauka & Zrozumienie",
-    title: "Bilans zysków i strat (Pro & Contra)",
-    desc: "Obiektywna analiza argumentów za i przeciw.",
-    prompt: "Przedstaw zrównoważony bilans zalet i wad (argumenty za i przeciw) dla tematu: [wpisz temat]. Przedstaw perspektywę obu stron bez stronniczości.",
+    category: "🎓 Learning",
+    title: "Pros & cons balance",
+    desc: "An objective analysis of both sides.",
+    prompt: "Present a balanced overview of pros and cons for the topic: [enter a topic]. Show both sides fairly, without bias.",
   },
   {
-    category: "🧠 Kreatywność & Plan",
-    title: "Burza mózgów: 7 pomysłów",
-    desc: "Świeże, niebanalne propozycje na dowolny temat.",
-    prompt: "Zrób burzę mózgów i zaproponuj 7 nieszablonowych, kreatywnych pomysłów na: [opisz projekt, nazwę firmy, prezent itp.].",
+    category: "🧠 Creativity & Plans",
+    title: "Brainstorm: 7 ideas",
+    desc: "Fresh, original suggestions on any topic.",
+    prompt: "Brainstorm and suggest 7 original, creative ideas for: [describe the project, company name, gift, etc.].",
   },
   {
-    category: "🧠 Kreatywność & Plan",
-    title: "Plan działania na 14 dni",
-    desc: "Realistyczny harmonogram z małymi krokami.",
-    prompt: "Ułóż dla mnie realistyczny, 14-dniowy plan działania krok po kroku, aby osiągnąć cel: [opisz cel]. Uwzględnij odpoczynek i małe kamienie milowe.",
+    category: "🧠 Creativity & Plans",
+    title: "14-day action plan",
+    desc: "A realistic schedule with small steps.",
+    prompt: "Build me a realistic 14-day step-by-step action plan to reach the goal: [describe the goal]. Include rest days and small milestones.",
   },
   {
-    category: "🧠 Kreatywność & Plan",
-    title: "Opowiadanie science-fiction",
-    desc: "Klimatyczny, wciągający wstęp do cyberpunkowej fabuły.",
-    prompt: "Napisz klimatyczny, wciągający wstęp do opowiadania science-fiction osadzonego w futurystycznej Polsce w 2088 roku, gdzie lokalne AI pomaga ludziom przetrwać awarię sieci.",
+    category: "🧠 Creativity & Plans",
+    title: "A sci-fi story opening",
+    desc: "An atmospheric hook for a cyberpunk tale.",
+    prompt: "Write an atmospheric, gripping opening of a science-fiction story set in the year 2088, where local AI helps people survive a global network blackout.",
   },
 ];
 
@@ -197,12 +197,16 @@ export class DownloadHub {
     this.smoothedSpeed = 0;
     this.isMinimized = false;
     this.isActive = false;
+    this.activeTab = "game";
+    this.lowFx = false; // reduced game effects for weak GPUs
 
-    // Mini-gra: NeuroPong
+    // Mini-game: NeuroPong
     this.canvas = null;
     this.ctx = null;
     this.gameRunning = false;
+    this.gamePaused = false;
     this.gameAnimId = null;
+    this.lastFrameTs = 0;
     this.score = 0;
     this.highScore = Number(localStorage.getItem("offchat_pong_hs") || 0);
     this.gameSound = localStorage.getItem("offchat_pong_sound") !== "0";
@@ -213,26 +217,31 @@ export class DownloadHub {
     this.particles = [];
     this.floatingTexts = [];
 
-    // Ciekawostki
+    // Facts
     this.triviaIndex = 0;
     this.triviaTimer = null;
 
     this.bindEvents();
   }
 
+  /** Enable/disable cheap rendering for the mini-game (Safe Mode). */
+  setLowFx(on) {
+    this.lowFx = !!on;
+  }
+
   bindEvents() {
-    // Przycisk "Rozejrzyj się po aplikacji"
+    // "Explore the app" button
     const minBtn = document.getElementById("btn-dl-minimize");
     if (minBtn) minBtn.addEventListener("click", () => this.minimize());
 
     const topCloseBtn = document.getElementById("btn-dl-close-top");
     if (topCloseBtn) topCloseBtn.addEventListener("click", () => this.minimize());
 
-    // Przycisk "Anuluj"
+    // "Cancel" button
     const abortBtn = document.getElementById("btn-dl-abort");
     if (abortBtn) abortBtn.addEventListener("click", () => this.abort());
 
-    // Mini dok: kliknięcie rozwija
+    // Mini dock: click expands
     const miniClick = document.getElementById("dl-mini-click");
     if (miniClick) miniClick.addEventListener("click", () => this.expand());
 
@@ -242,20 +251,20 @@ export class DownloadHub {
     const miniCancelBtn = document.getElementById("btn-mini-cancel");
     if (miniCancelBtn) miniCancelBtn.addEventListener("click", () => this.abort());
 
-    // Zakładki (Tabs)
+    // Tabs
     const tabs = document.querySelectorAll(".dl-tab");
     tabs.forEach((tab) => {
       tab.addEventListener("click", () => this.switchTab(tab.dataset.tab));
     });
 
-    // Ciekawostki: przycisk losowania
+    // Facts: shuffle button
     const nextTriviaBtn = document.getElementById("btn-next-trivia");
     if (nextTriviaBtn) nextTriviaBtn.addEventListener("click", () => this.nextTrivia());
 
-    // Szablony promptów: renderowanie i obsługa klików
+    // Prompt templates: render + click handling
     this.renderPromptTemplates();
 
-    // Kolejkowanie promptu z zakładki
+    // Queue a prompt from the tab
     const queueBtn = document.getElementById("btn-dl-queue-send");
     if (queueBtn) {
       queueBtn.addEventListener("click", () => {
@@ -269,7 +278,15 @@ export class DownloadHub {
       });
     }
 
-    // Mini-gra: setup
+    // Pause the game when the page is hidden (battery + GPU).
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) this.pauseGame();
+      else if (this.isActive && !this.isMinimized && this.activeTab === "game") {
+        this.resumeGame();
+      }
+    });
+
+    // Mini-game: setup
     this.initGameDOM();
   }
 
@@ -288,11 +305,11 @@ export class DownloadHub {
     if (miniDock) miniDock.hidden = true;
 
     const titleEl = document.getElementById("dl-title");
-    if (titleEl) titleEl.textContent = `${auto ? "Wznawianie" : "Pobieranie"}: ${model.name}`;
+    if (titleEl) titleEl.textContent = `${auto ? "Resuming" : "Downloading"}: ${model.name}`;
 
     const subEl = document.getElementById("dl-sub");
     if (subEl) {
-      subEl.textContent = `Rozmiar modelu: ~${Math.round(model.sizeMB)} MB · Po pobraniu działa w pełni offline.`;
+      subEl.textContent = `Model size: ~${Math.round(model.sizeMB)} MB · Works fully offline once downloaded.`;
     }
 
     const miniNameEl = document.getElementById("dl-mini-name");
@@ -303,17 +320,18 @@ export class DownloadHub {
       progress: 0,
       downloadedMB: 0,
       totalMB: model.sizeMB || 500,
-      speedText: "Łączenie…",
-      etaText: "obliczanie…",
-      text: "Nawiązywanie połączenia z CDN…",
+      speedText: "Connecting…",
+      etaText: "calculating…",
+      text: "Connecting to the CDN…",
     });
 
-    // Uruchomienie losowej ciekawostki
+    // Show a random fact
     this.triviaIndex = Math.floor(Math.random() * AI_TRIVIA.length);
     this.renderTrivia();
     this.startTriviaTimer();
 
-    // Uruchomienie mini-gry
+    // Start the mini-game
+    this.switchTab("game");
     this.startGame();
   }
 
@@ -332,11 +350,15 @@ export class DownloadHub {
         this.smoothedSpeed === 0 ? instantSpeed : this.smoothedSpeed * 0.7 + instantSpeed * 0.3;
       this.lastProgress = progress;
       this.lastTime = now;
+    } else if (dt >= 0.4) {
+      // Stalled (e.g. compiling) — decay the speed so it doesn't lie.
+      this.smoothedSpeed *= 0.9;
+      this.lastTime = now;
     }
 
     const downloadedMB = Math.round(progress * totalMB);
     const speedText =
-      this.smoothedSpeed > 0.05 ? `${this.smoothedSpeed.toFixed(1)} MB/s` : "Łączenie…";
+      this.smoothedSpeed > 0.05 ? `${this.smoothedSpeed.toFixed(1)} MB/s` : "Connecting…";
 
     let etaText = "—";
     if (this.smoothedSpeed > 0.05 && progress < 0.99) {
@@ -350,12 +372,12 @@ export class DownloadHub {
         etaText = `~${m} min ${s} s`;
       }
     } else if (progress >= 0.99) {
-      etaText = "gotowe!";
+      etaText = "done!";
     }
 
-    let phaseDesc = p?.text || "Pobieranie wag modelu…";
+    let phaseDesc = p?.text || "Downloading model weights…";
     if (p?.phase === "load") {
-      phaseDesc = "Kompilacja shaderów WebGPU i inicjalizacja pamięci…";
+      phaseDesc = "Compiling WebGPU shaders and initializing memory…";
     }
 
     this.updateHUD({
@@ -371,7 +393,7 @@ export class DownloadHub {
   updateHUD({ progress, downloadedMB, totalMB, speedText, etaText, text }) {
     const pct = Math.round(progress * 100);
 
-    // Duży modal
+    // Big modal
     const barEl = document.getElementById("dl-bar");
     if (barEl) barEl.style.width = `${pct}%`;
 
@@ -390,7 +412,7 @@ export class DownloadHub {
     const textEl = document.getElementById("dl-text");
     if (textEl) textEl.textContent = text;
 
-    // Mini Dok
+    // Mini dock
     const miniPctEl = document.getElementById("dl-mini-pct");
     if (miniPctEl) miniPctEl.textContent = `${pct}%`;
 
@@ -402,7 +424,7 @@ export class DownloadHub {
       miniStatsEl.textContent = `${downloadedMB}/${totalMB} MB · ${speedText} · ETA: ${etaText}`;
     }
 
-    // Aktualizacja wskaźnika w zakolejkowanej wiadomości w czacie
+    // Live indicator inside the queued chat message
     const queuedEl = document.getElementById("queued-dl-pct");
     if (queuedEl) {
       queuedEl.textContent = `${pct}% · ${speedText} · ETA: ${etaText}`;
@@ -410,6 +432,7 @@ export class DownloadHub {
   }
 
   minimize() {
+    if (!this.isActive) return;
     this.isMinimized = true;
     const overlay = document.getElementById("download-overlay");
     const miniDock = document.getElementById("dl-mini-dock");
@@ -420,12 +443,13 @@ export class DownloadHub {
   }
 
   expand() {
+    if (!this.isActive) return;
     this.isMinimized = false;
     const overlay = document.getElementById("download-overlay");
     const miniDock = document.getElementById("dl-mini-dock");
     if (overlay) overlay.hidden = false;
     if (miniDock) miniDock.hidden = true;
-    this.resumeGame();
+    if (this.activeTab === "game") this.resumeGame();
     this.onExpand?.();
   }
 
@@ -445,6 +469,7 @@ export class DownloadHub {
   }
 
   switchTab(tabId) {
+    this.activeTab = tabId;
     document.querySelectorAll(".dl-tab").forEach((t) => {
       t.classList.toggle("active", t.dataset.tab === tabId);
     });
@@ -453,20 +478,21 @@ export class DownloadHub {
     });
 
     if (tabId === "game") {
-      this.resumeGame();
+      // Only render when actually visible — never waste GPU in background.
+      if (this.isActive && !this.isMinimized && !document.hidden) this.resumeGame();
     } else {
       this.pauseGame();
     }
   }
 
-  // ── Ciekawostki ──────────────────────────────────────────────
+  // ── Facts ────────────────────────────────────────────────────
   renderTrivia() {
     const item = AI_TRIVIA[this.triviaIndex % AI_TRIVIA.length];
     if (!item) return;
 
     const badge = document.getElementById("trivia-badge");
     if (badge) {
-      badge.textContent = `${item.icon} ${item.tag} · Ciekawostka ${((this.triviaIndex % AI_TRIVIA.length) + 1)}/${AI_TRIVIA.length}`;
+      badge.textContent = `${item.icon} ${item.tag} · Fact ${((this.triviaIndex % AI_TRIVIA.length) + 1)}/${AI_TRIVIA.length}`;
     }
 
     const titleEl = document.getElementById("trivia-title");
@@ -495,7 +521,7 @@ export class DownloadHub {
     }
   }
 
-  // ── Szablony promptów ────────────────────────────────────────
+  // ── Prompt templates ─────────────────────────────────────────
   renderPromptTemplates() {
     const list = document.getElementById("prompt-templates-list");
     if (!list) return;
@@ -504,32 +530,45 @@ export class DownloadHub {
     PROMPT_TEMPLATES.forEach((tmpl) => {
       const card = document.createElement("div");
       card.className = "prompt-template-card glass";
-      card.innerHTML = `
-        <div class="prompt-tmpl-top">
-          <span class="prompt-tmpl-tag">${tmpl.category}</span>
-          <strong>${tmpl.title}</strong>
-        </div>
-        <p class="prompt-tmpl-desc">${tmpl.desc}</p>
-        <pre class="prompt-tmpl-preview"><code>${tmpl.prompt.slice(0, 100)}…</code></pre>
-        <button class="btn ghost sm prompt-tmpl-btn">
-          <svg><use href="#i-spark"/></svg> Użyj w czacie
-        </button>
-      `;
+      const tag = document.createElement("span");
+      tag.className = "prompt-tmpl-tag";
+      tag.textContent = tmpl.category;
+      const title = document.createElement("strong");
+      title.textContent = tmpl.title;
+      const top = document.createElement("div");
+      top.className = "prompt-tmpl-top";
+      top.append(tag, title);
+      const desc = document.createElement("p");
+      desc.className = "prompt-tmpl-desc";
+      desc.textContent = tmpl.desc;
+      const preview = document.createElement("pre");
+      preview.className = "prompt-tmpl-preview";
+      const code = document.createElement("code");
+      code.textContent = tmpl.prompt.slice(0, 100) + "…";
+      preview.appendChild(code);
+      const btn = document.createElement("button");
+      btn.className = "btn ghost sm prompt-tmpl-btn";
+      btn.innerHTML = `<svg><use href="#i-spark"/></svg> Use in chat`;
 
-      card.querySelector(".prompt-tmpl-btn").addEventListener("click", () => {
+      btn.addEventListener("click", () => {
         this.onUsePrompt?.(tmpl.prompt);
         this.minimize();
       });
 
+      card.append(top, desc, preview, btn);
       list.appendChild(card);
     });
   }
 
-  // ── Mini-gra: NeuroPong ──────────────────────────────────────
+  // ── Mini-game: NeuroPong ─────────────────────────────────────
   initGameDOM() {
     this.canvas = document.getElementById("game-canvas");
     if (!this.canvas) return;
-    this.ctx = this.canvas.getContext("2d");
+    try {
+      this.ctx = this.canvas.getContext("2d");
+    } catch {
+      this.ctx = null;
+    }
 
     // Sound toggle
     const soundBtn = document.getElementById("game-sound-btn");
@@ -538,7 +577,9 @@ export class DownloadHub {
       soundIcon.textContent = this.gameSound ? "🔊" : "🔇";
       soundBtn.addEventListener("click", () => {
         this.gameSound = !this.gameSound;
-        localStorage.setItem("offchat_pong_sound", this.gameSound ? "1" : "0");
+        try {
+          localStorage.setItem("offchat_pong_sound", this.gameSound ? "1" : "0");
+        } catch { /* ignore */ }
         soundIcon.textContent = this.gameSound ? "🔊" : "🔇";
       });
     }
@@ -553,7 +594,7 @@ export class DownloadHub {
     const hsEl = document.getElementById("game-highscore");
     if (hsEl) hsEl.textContent = this.highScore;
 
-    // Sterowanie myszą
+    // Mouse controls
     this.canvas.addEventListener("mousemove", (e) => {
       const rect = this.canvas.getBoundingClientRect();
       const scaleX = this.canvas.width / rect.width;
@@ -561,7 +602,7 @@ export class DownloadHub {
       this.paddle.targetX = Math.max(0, Math.min(this.canvas.width - this.paddle.width, mouseX - this.paddle.width / 2));
     });
 
-    // Sterowanie dotykiem (mobile-friendly, bez przewijania)
+    // Touch controls (mobile-friendly, no scrolling)
     const handleTouch = (e) => {
       if (!e.touches || !e.touches[0]) return;
       e.preventDefault();
@@ -573,7 +614,7 @@ export class DownloadHub {
     this.canvas.addEventListener("touchstart", handleTouch, { passive: false });
     this.canvas.addEventListener("touchmove", handleTouch, { passive: false });
 
-    // Sterowanie klawiaturą
+    // Keyboard controls
     window.addEventListener("keydown", (e) => {
       if (!this.gameRunning || this.gamePaused) return;
       const step = 28;
@@ -607,7 +648,7 @@ export class DownloadHub {
       osc.start();
       osc.stop(this.audioCtx.currentTime + duration);
     } catch {
-      /* AudioContext fallback ignoruj */
+      /* AudioContext unavailable — ignore */
     }
   }
 
@@ -671,10 +712,12 @@ export class DownloadHub {
   }
 
   startGame() {
-    if (!this.canvas || !this.ctx) return; // brak 2D contextu (CSP/restrykcje) — gra off, reszta działa
+    if (!this.canvas || !this.ctx) return; // no 2D context (CSP/restrictions) — game off, rest works
+    this.stopGame();
     this.resetGame(true);
     this.gameRunning = true;
     this.gamePaused = false;
+    this.lastFrameTs = 0;
     this.loopGame();
   }
 
@@ -683,10 +726,13 @@ export class DownloadHub {
   }
 
   resumeGame() {
-    if (this.gameRunning && this.gamePaused) {
-      this.gamePaused = false;
-      this.loopGame();
-    }
+    // Never start a second loop, and never render while hidden.
+    if (!this.gameRunning || !this.gamePaused) return;
+    if (this.isMinimized || !this.isActive || document.hidden) return;
+    if (this.activeTab !== "game") return;
+    this.gamePaused = false;
+    this.lastFrameTs = 0;
+    this.loopGame();
   }
 
   stopGame() {
@@ -698,31 +744,47 @@ export class DownloadHub {
     }
   }
 
-  loopGame() {
-    if (!this.gameRunning || this.gamePaused) return;
-
-    this.updateGamePhysics();
-    this.renderGame();
-
-    this.gameAnimId = requestAnimationFrame(() => this.loopGame());
+  loopGame(ts = 0) {
+    if (!this.gameRunning || this.gamePaused) {
+      this.gameAnimId = null;
+      return;
+    }
+    // Low-FX mode: cap at ~30 fps to spare weak GPUs.
+    const minDelta = this.lowFx ? 33 : 0;
+    if (ts - this.lastFrameTs >= minDelta) {
+      this.lastFrameTs = ts;
+      try {
+        this.updateGamePhysics();
+        this.renderGame();
+      } catch {
+        this.stopGame();
+        return;
+      }
+    }
+    this.gameAnimId = requestAnimationFrame((t) => this.loopGame(t));
   }
 
   updateGamePhysics() {
     const w = this.canvas.width;
     const h = this.canvas.height;
+    const low = this.lowFx;
 
-    // Płynne podążanie paletki
+    // Smooth paddle following
     this.paddle.x += (this.paddle.targetX - this.paddle.x) * 0.35;
 
-    // Ślad piłki
-    this.ball.trail.push({ x: this.ball.x, y: this.ball.y });
-    if (this.ball.trail.length > 7) this.ball.trail.shift();
+    // Ball trail
+    if (!low) {
+      this.ball.trail.push({ x: this.ball.x, y: this.ball.y });
+      if (this.ball.trail.length > 7) this.ball.trail.shift();
+    } else if (this.ball.trail.length) {
+      this.ball.trail.length = 0;
+    }
 
-    // Ruch piłki
+    // Ball movement
     this.ball.x += this.ball.vx;
     this.ball.y += this.ball.vy;
 
-    // Odbicia od ścian
+    // Wall bounces
     if (this.ball.x - this.ball.radius <= 0) {
       this.ball.x = this.ball.radius;
       this.ball.vx = Math.abs(this.ball.vx);
@@ -739,7 +801,7 @@ export class DownloadHub {
       this.playBeep(320, "triangle", 0.04);
     }
 
-    // Kolizja z paletką
+    // Paddle collision
     const py = this.paddle.y;
     const px = this.paddle.x;
     const pw = this.paddle.width;
@@ -753,17 +815,18 @@ export class DownloadHub {
       this.ball.vy > 0
     ) {
       this.ball.y = py - this.ball.radius;
-      // Kąt zależny od punktu uderzenia
+      // Angle depends on the hit point
       const hitOffset = (this.ball.x - (px + pw / 2)) / (pw / 2);
       const speed = Math.min(7.5, Math.hypot(this.ball.vx, this.ball.vy) * 1.02);
-      const angle = hitOffset * 0.95; // maks ~55 stopni
+      const angle = hitOffset * 0.95; // max ~55 degrees
       this.ball.vx = Math.sin(angle) * speed;
       this.ball.vy = -Math.abs(Math.cos(angle) * speed);
 
       this.playBeep(440 + Math.abs(hitOffset) * 180, "sine", 0.07);
 
-      // Cząsteczki z paletki
-      for (let i = 0; i < 5; i++) {
+      // Paddle particles
+      const n = low ? 2 : 5;
+      for (let i = 0; i < n; i++) {
         this.particles.push({
           x: this.ball.x,
           y: this.ball.y,
@@ -776,34 +839,35 @@ export class DownloadHub {
       }
     }
 
-    // Utrata piłki (dół)
+    // Lost ball (bottom)
     if (this.ball.y - this.ball.radius > h) {
       this.playBeep(180, "sawtooth", 0.15);
       this.resetGame(false);
       return;
     }
 
-    // Zbieranie tokenów AI
+    // Collecting AI tokens
     for (let i = this.tokens.length - 1; i >= 0; i--) {
       const t = this.tokens[i];
       const dist = Math.hypot(this.ball.x - t.x, this.ball.y - t.y);
       if (dist <= this.ball.radius + t.radius) {
-        // Trafienie!
+        // Hit!
         this.score += t.pts;
         const sEl = document.getElementById("game-score");
         if (sEl) sEl.textContent = this.score;
 
         if (this.score > this.highScore) {
           this.highScore = this.score;
-          localStorage.setItem("offchat_pong_hs", String(this.highScore));
+          try {
+            localStorage.setItem("offchat_pong_hs", String(this.highScore));
+          } catch { /* ignore */ }
           const hsEl = document.getElementById("game-highscore");
           if (hsEl) hsEl.textContent = this.highScore;
         }
 
-        // Płynny dźwięk
         this.playBeep(520 + t.pts * 8, "sine", 0.1);
 
-        // Pływający tekst
+        // Floating text
         this.floatingTexts.push({
           text: `+${t.pts}`,
           x: t.x,
@@ -812,8 +876,9 @@ export class DownloadHub {
           color: t.color,
         });
 
-        // Eksplozja cząsteczek
-        for (let p = 0; p < 10; p++) {
+        // Particle burst
+        const n = low ? 4 : 10;
+        for (let p = 0; p < n; p++) {
           const ang = Math.random() * Math.PI * 2;
           const spd = Math.random() * 4 + 1.5;
           this.particles.push({
@@ -827,19 +892,19 @@ export class DownloadHub {
           });
         }
 
-        // Odbicie piłki od tokena
+        // Bounce the ball off the token
         this.ball.vy = -this.ball.vy;
         this.tokens.splice(i, 1);
       }
     }
 
-    // Respawn tokenów, gdy zebrano wszystkie
+    // Respawn tokens when all are collected
     if (this.tokens.length === 0) {
       this.spawnTokens();
       this.playBeep(880, "sine", 0.18);
     }
 
-    // Aktualizacja cząsteczek
+    // Update particles
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
       p.x += p.vx;
@@ -849,7 +914,7 @@ export class DownloadHub {
       if (p.life <= 0) this.particles.splice(i, 1);
     }
 
-    // Aktualizacja tekstów
+    // Update floating texts
     for (let i = this.floatingTexts.length - 1; i >= 0; i--) {
       const ft = this.floatingTexts[i];
       ft.y -= 1.1;
@@ -862,36 +927,37 @@ export class DownloadHub {
     const ctx = this.ctx;
     const w = this.canvas.width;
     const h = this.canvas.height;
+    const low = this.lowFx;
 
-    // Tło
+    // Background
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = "rgba(11, 16, 32, 0.95)";
     ctx.fillRect(0, 0, w, h);
 
-    // Subtelna neonowa siatka w tle
+    // Subtle neon grid
     ctx.strokeStyle = "rgba(124, 58, 237, 0.08)";
     ctx.lineWidth = 1;
+    ctx.beginPath();
     for (let x = 0; x < w; x += 25) {
-      ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, h);
-      ctx.stroke();
     }
     for (let y = 0; y < h; y += 25) {
-      ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(w, y);
-      ctx.stroke();
     }
+    ctx.stroke();
 
-    // Rysowanie tokenów AI
+    // AI tokens
     for (const t of this.tokens) {
       t.pulse = (t.pulse || 0) + 0.05;
       const r = t.radius + Math.sin(t.pulse) * 1.5;
 
       ctx.save();
-      ctx.shadowColor = t.color;
-      ctx.shadowBlur = 10;
+      if (!low) {
+        ctx.shadowColor = t.color;
+        ctx.shadowBlur = 10;
+      }
       ctx.fillStyle = "rgba(24, 32, 66, 0.85)";
       ctx.strokeStyle = t.color;
       ctx.lineWidth = 2;
@@ -908,30 +974,36 @@ export class DownloadHub {
       ctx.restore();
     }
 
-    // Ślad piłki
-    for (let i = 0; i < this.ball.trail.length; i++) {
-      const tr = this.ball.trail[i];
-      const a = (i + 1) / (this.ball.trail.length + 1) * 0.35;
-      ctx.fillStyle = `rgba(34, 211, 238, ${a})`;
-      ctx.beginPath();
-      ctx.arc(tr.x, tr.y, this.ball.radius * (0.5 + a * 0.5), 0, Math.PI * 2);
-      ctx.fill();
+    // Ball trail (skipped in low-FX mode)
+    if (!low) {
+      for (let i = 0; i < this.ball.trail.length; i++) {
+        const tr = this.ball.trail[i];
+        const a = (i + 1) / (this.ball.trail.length + 1) * 0.35;
+        ctx.fillStyle = `rgba(34, 211, 238, ${a})`;
+        ctx.beginPath();
+        ctx.arc(tr.x, tr.y, this.ball.radius * (0.5 + a * 0.5), 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
-    // Piłka
+    // Ball
     ctx.save();
-    ctx.shadowColor = "#22d3ee";
-    ctx.shadowBlur = 14;
+    if (!low) {
+      ctx.shadowColor = "#22d3ee";
+      ctx.shadowBlur = 14;
+    }
     ctx.fillStyle = "#e0f2fe";
     ctx.beginPath();
     ctx.arc(this.ball.x, this.ball.y, this.ball.radius, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
-    // Paletka
+    // Paddle
     ctx.save();
-    ctx.shadowColor = "#d946ef";
-    ctx.shadowBlur = 12;
+    if (!low) {
+      ctx.shadowColor = "#d946ef";
+      ctx.shadowBlur = 12;
+    }
     const grad = ctx.createLinearGradient(this.paddle.x, 0, this.paddle.x + this.paddle.width, 0);
     grad.addColorStop(0, "#22d3ee");
     grad.addColorStop(1, "#d946ef");
@@ -940,7 +1012,7 @@ export class DownloadHub {
     ctx.fill();
     ctx.restore();
 
-    // Cząsteczki
+    // Particles
     for (const p of this.particles) {
       ctx.fillStyle = p.color;
       ctx.globalAlpha = p.alpha;
@@ -950,7 +1022,7 @@ export class DownloadHub {
     }
     ctx.globalAlpha = 1;
 
-    // Pływające teksty
+    // Floating texts
     for (const ft of this.floatingTexts) {
       ctx.save();
       ctx.globalAlpha = Math.max(0, ft.alpha);
@@ -963,6 +1035,11 @@ export class DownloadHub {
   }
 
   roundRect(ctx, x, y, width, height, radius) {
+    if (typeof ctx.roundRect === "function") {
+      ctx.beginPath();
+      ctx.roundRect(x, y, width, height, radius);
+      return;
+    }
     ctx.beginPath();
     ctx.moveTo(x + radius, y);
     ctx.lineTo(x + width - radius, y);
