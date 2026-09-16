@@ -426,6 +426,9 @@ function releaseIdleModel() {
  */
 async function wakeUpChecks() {
   touchActivity();
+  // Never probe while the engine is working: on a slow CPU a token can keep
+  // the worker busy for seconds and we must not mistake that for death.
+  if (S.generating || S.downloading) return;
   if (!S.engineLoaded || !S.engineModelKey) return;
   const timeout = idleTimeoutMs();
   const away = S.hiddenAt ? Date.now() - S.hiddenAt : 0;

@@ -276,13 +276,18 @@ export class EngineProxy {
     await this.direct?.unload?.().catch(() => {});
   }
 
-  /** Real engine state (a worker round trip in worker mode). */
+  /**
+   * Real engine state (a worker round trip in worker mode).
+   * A timeout here is NOT treated as death: a slow CPU token can block the
+   * worker for a moment, and killing it would throw away a running answer.
+   * The watchdog handles real deaths.
+   */
   async state() {
     await this.init();
     if (this.mode === "worker" && this.worker && !this.workerBroken) {
       try {
-        return await this._workerCall("state", {}, { timeoutMs: 5000 });
-      } catch { /* fall through to direct */ }
+        return await this._workerCall("state", {}, { timeoutMs: 3000 });
+      } catch { /* fall through to the direct engine */ }
     }
     return this.direct?.state?.() || { kind: null, modelId: null, loaded: false };
   }
