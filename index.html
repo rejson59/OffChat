@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>OffChat — prywatny czat AI w przeglądarce</title>
-  <meta name="description" content="OffChat — lekki czat z lokalnym modelem AI. 100% w przeglądarce, bez serwerów, z pamięcią podręczną offline. Działa nawet na słabych telefonach.">
+  <title>OffChat — private in-browser AI chat</title>
+  <meta name="description" content="OffChat — lightweight chat with a local AI model. 100% in your browser, no servers, offline cache. Works even on weak phones.">
   <meta name="theme-color" content="#7c3aed">
   <meta name="color-scheme" content="dark light">
   <link rel="manifest" href="./manifest.webmanifest">
@@ -21,8 +21,8 @@
   <link rel="dns-prefetch" href="https://esm.sh">
   <link rel="stylesheet" href="./css/style.css">
 </head>
-<body data-theme="auto">
-  <!-- Tło: animowana zorza (wyłączane w ustawieniach / przy reduced-motion) -->
+<body data-theme="auto" data-accent="violet" data-bg="aurora" data-bubbles="round">
+  <!-- Background: animated aurora (disabled in settings / reduced-motion / safe mode) -->
   <div class="aurora" aria-hidden="true">
     <span class="blob b1"></span>
     <span class="blob b2"></span>
@@ -30,12 +30,12 @@
     <span class="grain"></span>
   </div>
 
-  <!-- Ikony SVG (sprite) -->
+  <!-- SVG icons (sprite) -->
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <defs>
       <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
       <symbol id="i-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5c-1.5 0-2.9-.4-4.1-1L3 20l1-5.4A8.5 8.5 0 1 1 21 11.5z"/></symbol>
-      <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h0a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 1 1.5h0a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
       <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
       <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/></symbol>
       <symbol id="i-stop" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></symbol>
@@ -62,6 +62,7 @@
       <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
       <symbol id="i-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7V8zM3.3 7 12 12l8.7-5M12 22V12"/></symbol>
       <symbol id="i-game" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="15" y1="13" x2="15.01" y2="13"/><line x1="18" y1="11" x2="18.01" y2="11"/><rect x="2" y="6" width="20" height="12" rx="6"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></symbol>
       <symbol id="i-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
       <symbol id="i-minimize" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></symbol>
       <symbol id="i-rocket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 9V4s3.03.55 4 2c1.08 1.62 0 5 0 5"/></symbol>
@@ -69,32 +70,35 @@
   </svg>
 
   <div class="app">
-    <!-- Pasek górny -->
+    <!-- Top bar -->
     <header class="topbar glass">
-      <button class="icon-btn only-mobile" id="btn-threads" aria-label="Rozmowy">
+      <button class="icon-btn" id="btn-threads" aria-label="Conversations" title="Conversations">
         <svg><use href="#i-menu"/></svg>
       </button>
       <div class="brand">
         <img src="./icons/icon-192.png" alt="OffChat" width="36" height="36" class="logo">
         <div class="brand-t">
           <span class="brand-name">OffChat</span>
-          <span class="brand-tag">100% lokalnie · offline</span>
+          <span class="brand-tag">100% local · offline</span>
         </div>
       </div>
       <div class="pill" id="status-pill" data-state="idle" role="status">
         <span class="dot"></span>
-        <span class="pill-t"><strong id="status-text">Start…</strong><small id="status-sub"></small></span>
+        <span class="pill-t"><strong id="status-text">Starting…</strong><small id="status-sub"></small></span>
       </div>
       <div class="top-actions">
-        <button class="model-chip glass" id="btn-model" title="Wybierz model AI">
+        <button class="model-chip glass" id="btn-model" title="Pick an AI model">
           <svg><use href="#i-cpu"/></svg>
-          <span id="model-chip-name">Wybierz model</span>
+          <span id="model-chip-name">Pick a model</span>
           <svg class="chev"><use href="#i-chev"/></svg>
         </button>
-        <button class="icon-btn" id="btn-install" title="Zainstaluj aplikację" hidden>
+        <button class="icon-btn" id="btn-install" title="Install the app" hidden>
           <svg><use href="#i-download"/></svg>
         </button>
-        <button class="icon-btn" id="btn-settings" title="Ustawienia" aria-label="Ustawienia">
+        <button class="icon-btn" id="btn-export-thread" title="Export this chat as Markdown" aria-label="Export this chat as Markdown">
+          <svg><use href="#i-download"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
           <svg><use href="#i-gear"/></svg>
         </button>
       </div>
@@ -102,31 +106,37 @@
 
     <div class="offline-banner" id="offline-banner" hidden>
       <svg><use href="#i-wifioff"/></svg>
-      <span>Jesteś offline — działa model zapisany w pamięci podręcznej.</span>
+      <span>You are offline — using the model stored in the local cache.</span>
+    </div>
+
+    <div class="safe-banner" id="safe-banner" hidden>
+      <svg><use href="#i-shield"/></svg>
+      <span>Safe Mode is on — visuals simplified to protect your GPU. Change it in Settings.</span>
+      <button class="icon-btn xs" id="btn-safe-off" title="Turn Safe Mode off" aria-label="Turn Safe Mode off"><svg><use href="#i-x"/></svg></button>
     </div>
 
     <div class="layout">
-      <!-- Panel rozmów -->
-      <aside class="drawer glass" id="drawer" aria-label="Rozmowy">
+      <!-- Conversations panel -->
+      <aside class="drawer glass" id="drawer" aria-label="Conversations">
         <div class="drawer-head">
-          <h2>Rozmowy</h2>
+          <h2>Chats</h2>
           <div class="row gap">
-            <button class="btn primary sm" id="btn-new-chat"><svg><use href="#i-plus"/></svg>Nowa</button>
-            <button class="icon-btn only-mobile" id="btn-close-drawer" aria-label="Zamknij"><svg><use href="#i-x"/></svg></button>
+            <button class="btn primary sm" id="btn-new-chat"><svg><use href="#i-plus"/></svg>New</button>
+            <button class="icon-btn only-mobile" id="btn-close-drawer" aria-label="Close"><svg><use href="#i-x"/></svg></button>
           </div>
         </div>
         <label class="search">
           <svg><use href="#i-search"/></svg>
-          <input type="search" id="thread-search" placeholder="Szukaj rozmowy…" autocomplete="off">
+          <input type="search" id="thread-search" placeholder="Search chats…" autocomplete="off">
         </label>
-        <nav class="thread-list" id="thread-list" aria-label="Lista rozmów"></nav>
+        <nav class="thread-list" id="thread-list" aria-label="Chat list"></nav>
         <div class="drawer-foot">
-          <div class="storage" id="storage-box" title="Zużycie pamięci przeglądarki">
+          <div class="storage" id="storage-box" title="Browser storage usage">
             <div class="bar"><i id="storage-bar"></i></div>
-            <small id="storage-text">Pamięć: …</small>
+            <small id="storage-text">Storage: …</small>
           </div>
           <div class="row gap">
-            <button class="btn ghost sm grow" id="btn-export"><svg><use href="#i-upload"/></svg>Eksport</button>
+            <button class="btn ghost sm grow" id="btn-export"><svg><use href="#i-upload"/></svg>Export</button>
             <button class="btn ghost sm grow" id="btn-import"><svg><use href="#i-download"/></svg>Import</button>
             <input type="file" id="import-file" accept="application/json,.json" hidden>
           </div>
@@ -134,49 +144,49 @@
       </aside>
       <div class="scrim" id="scrim" hidden></div>
 
-      <!-- Czat -->
+      <!-- Chat -->
       <main class="chat">
         <section class="welcome" id="welcome">
           <div class="hero glass">
             <img src="./icons/icon-192.png" alt="" width="72" height="72" class="hero-logo">
-            <h1>Cześć! Jestem <span class="grad">OffChat</span> 👋</h1>
-            <p class="muted">Prywatny asystent AI, który mieszka <strong>w Twojej przeglądarce</strong>.
-              Zero serwerów, zero wysyłania danych — model działa lokalnie na Twoim urządzeniu.</p>
+            <h1>Hi! I'm <span class="grad">OffChat</span> 👋</h1>
+            <p class="muted">A private AI assistant that lives <strong>inside your browser</strong>.
+              No servers, no data ever leaving your device — the model runs locally on your hardware.</p>
             <div class="hero-badges">
-              <span class="badge"><svg><use href="#i-shield"/></svg>Pełna prywatność</span>
-              <span class="badge"><svg><use href="#i-wifioff"/></svg>Praca offline</span>
+              <span class="badge"><svg><use href="#i-shield"/></svg>Full privacy</span>
+              <span class="badge"><svg><use href="#i-wifioff"/></svg>Works offline</span>
               <span class="badge"><svg><use href="#i-bolt"/></svg>WebGPU + WASM</span>
             </div>
-            <button class="btn primary lg" id="model-cta"><svg><use href="#i-spark"/></svg>Wybierz model i zacznij</button>
-            <p class="hint" id="hw-hint">Sprawdzanie możliwości urządzenia…</p>
+            <button class="btn primary lg" id="model-cta"><svg><use href="#i-spark"/></svg>Pick a model &amp; start</button>
+            <p class="hint" id="hw-hint">Checking your device…</p>
           </div>
-          <div class="suggestions" id="suggestions" aria-label="Propozycje pytań"></div>
         </section>
 
         <div class="load-more-wrap" id="load-more-wrap" hidden>
-          <button class="btn ghost sm" id="btn-load-more">Wczytaj starsze wiadomości</button>
+          <button class="btn ghost sm" id="btn-load-more">Load older messages</button>
         </div>
-        <section class="messages" id="messages" aria-live="polite" aria-label="Wiadomości"></section>
+        <section class="messages" id="messages" aria-live="polite" aria-label="Messages"></section>
 
-        <button class="fab glass" id="scroll-fab" aria-label="Przewiń na dół" hidden>
+        <button class="fab glass" id="scroll-fab" aria-label="Scroll to bottom" hidden>
           <svg><use href="#i-down"/></svg>
         </button>
 
-        <!-- Kompozytor -->
+        <!-- Composer -->
         <footer class="composer">
           <div class="progress-line" id="progress-line" hidden><i></i></div>
           <div class="composer-box glass">
             <textarea id="input" rows="1" maxlength="4000"
-              placeholder="Napisz wiadomość… (Enter = wyślij)" aria-label="Wiadomość"></textarea>
-            <button class="icon-btn danger" id="btn-stop" title="Zatrzymaj generowanie" aria-label="Zatrzymaj" hidden>
+              placeholder="Write a message… (Enter = send)" aria-label="Message"></textarea>
+            <button class="icon-btn danger" id="btn-stop" title="Stop generating" aria-label="Stop" hidden>
               <svg><use href="#i-stop"/></svg>
             </button>
-            <button class="send-btn" id="btn-send" title="Wyślij" aria-label="Wyślij">
+            <button class="send-btn" id="btn-send" title="Send" aria-label="Send">
               <svg><use href="#i-send"/></svg>
             </button>
           </div>
           <div class="composer-meta">
-            <small id="ctx-info" title="Szacowane zużycie okna kontekstu"></small>
+            <small id="ctx-info" title="Estimated context-window usage"></small>
+            <small id="char-count" title="Message length"></small>
             <small id="gen-stats"></small>
           </div>
         </footer>
@@ -184,10 +194,10 @@
     </div>
   </div>
 
-  <!-- Centrum pobierania modelu (Download Hub & Entertainment) -->
+  <!-- Model Download Hub -->
   <div class="dl-overlay" id="download-overlay" hidden>
     <div class="dl-card glass">
-      <!-- Górny pasek telemetrii -->
+      <!-- Top telemetry bar -->
       <div class="dl-card-head">
         <div class="dl-card-title-row">
           <div class="dl-badge-wrap">
@@ -195,112 +205,112 @@
             <span class="dl-pulse-dot"></span>
           </div>
           <div class="dl-card-title-text">
-            <h3 id="dl-title">Pobieranie modelu…</h3>
-            <p class="hint" id="dl-sub">Pierwsze pobranie waży setki MB — kolejne uruchomienia będą natychmiastowe i offline.</p>
+            <h3 id="dl-title">Downloading model…</h3>
+            <p class="hint" id="dl-sub">The first download weighs hundreds of MB — every later launch will be instant and offline.</p>
           </div>
-          <button class="icon-btn sm" id="btn-dl-close-top" title="Minimalizuj i rozejrzyj się po aplikacji" aria-label="Minimalizuj">
+          <button class="icon-btn sm" id="btn-dl-close-top" title="Minimize and explore the app" aria-label="Minimize">
             <svg><use href="#i-minimize"/></svg>
           </button>
         </div>
 
         <div class="dl-bar"><i id="dl-bar"></i></div>
 
-        <!-- Siatka telemetrii na żywo -->
+        <!-- Live telemetry grid -->
         <div class="dl-stats-grid">
           <div class="dl-stat-item">
-            <small>Postęp</small>
+            <small>Progress</small>
             <strong id="dl-pct">0%</strong>
           </div>
           <div class="dl-stat-item">
-            <small>Pobrano</small>
+            <small>Downloaded</small>
             <strong id="dl-bytes">0 / 0 MB</strong>
           </div>
           <div class="dl-stat-item">
-            <small>Prędkość</small>
+            <small>Speed</small>
             <strong id="dl-speed">— MB/s</strong>
           </div>
           <div class="dl-stat-item">
-            <small>Pozostało</small>
+            <small>Left</small>
             <strong id="dl-eta">—</strong>
           </div>
         </div>
 
         <div class="dl-status-line">
           <span class="dl-phase-dot"></span>
-          <span id="dl-text" class="muted">Nawiązywanie połączenia z CDN…</span>
+          <span id="dl-text" class="muted">Connecting to the CDN…</span>
         </div>
 
         <div class="dl-quick-actions">
           <button class="btn primary sm glow" id="btn-dl-minimize">
-            <svg><use href="#i-search"/></svg> Rozejrzyj się po aplikacji
+            <svg><use href="#i-search"/></svg> Explore the app
           </button>
           <button class="btn ghost sm danger-hover" id="btn-dl-abort">
-            <svg><use href="#i-x"/></svg> Anuluj pobieranie
+            <svg><use href="#i-x"/></svg> Cancel download
           </button>
         </div>
       </div>
 
-      <!-- Centrum aktywności w trakcie pobierania -->
+      <!-- Activity hub while downloading -->
       <div class="dl-activity-hub">
         <div class="dl-tabs" role="tablist">
           <button class="dl-tab active" data-tab="game">
-            <svg><use href="#i-game"/></svg> <span>🎮 Gra NeuroPong</span>
+            <svg><use href="#i-game"/></svg> <span>🎮 NeuroPong</span>
           </button>
           <button class="dl-tab" data-tab="trivia">
-            <svg><use href="#i-info"/></svg> <span>🧠 Ciekawostki AI</span>
+            <svg><use href="#i-info"/></svg> <span>🧠 AI facts</span>
           </button>
           <button class="dl-tab" data-tab="prompts">
-            <svg><use href="#i-spark"/></svg> <span>💡 Szablony promptów</span>
+            <svg><use href="#i-spark"/></svg> <span>💡 Prompt templates</span>
           </button>
           <button class="dl-tab" data-tab="queue">
-            <svg><use href="#i-send"/></svg> <span>✍️ Zaplanuj pytanie</span>
+            <svg><use href="#i-send"/></svg> <span>✍️ Queue a question</span>
           </button>
         </div>
 
-        <!-- Zakładka 1: Mini-gra NeuroPong -->
+        <!-- Tab 1: NeuroPong mini-game -->
         <div class="dl-tab-pane active" id="pane-game">
           <div class="game-container">
             <div class="game-top-bar">
-              <span class="game-stat">Wynik: <strong id="game-score">0</strong></span>
-              <span class="game-stat">Rekord: <strong id="game-highscore">0</strong></span>
+              <span class="game-stat">Score: <strong id="game-score">0</strong></span>
+              <span class="game-stat">Best: <strong id="game-highscore">0</strong></span>
               <div class="game-actions">
-                <button class="icon-btn xs" id="game-sound-btn" title="Dźwięk włączony/wyłączony">
+                <button class="icon-btn xs" id="game-sound-btn" title="Sound on/off">
                   <span id="game-sound-icon">🔊</span>
                 </button>
                 <button class="btn ghost xs" id="game-restart-btn">Restart</button>
               </div>
             </div>
             <canvas id="game-canvas" width="460" height="210"></canvas>
-            <div class="game-hint">Steruj myszką, palcem lub strzałkami ◄ ►. Odbijaj piłkę i zbieraj tokeny AI!</div>
+            <div class="game-hint">Move with mouse, finger or ◄ ► arrows. Bounce the ball and collect AI tokens!</div>
           </div>
         </div>
 
-        <!-- Zakładka 2: Ciekawostki o AI -->
+        <!-- Tab 2: AI facts -->
         <div class="dl-tab-pane" id="pane-trivia">
           <div class="trivia-card glass">
             <div class="trivia-header">
-              <span class="trivia-badge" id="trivia-badge">🧠 Wiedza · Ciekawostka 1/16</span>
-              <button class="btn ghost xs" id="btn-next-trivia">🎲 Losuj kolejną</button>
+              <span class="trivia-badge" id="trivia-badge">🧠 Knowledge · Fact 1/16</span>
+              <button class="btn ghost xs" id="btn-next-trivia">🎲 Next fact</button>
             </div>
-            <h4 id="trivia-title">Lokalne AI w Twojej przeglądarce</h4>
-            <p id="trivia-text">OffChat wykonuje wszystkie obliczenia wyłącznie na Twoim urządzeniu. Twoje wiadomości, pytania i odpowiedzi nigdy nie opuszczają Twojej przeglądarki i nie trafiają na żaden zewnętrzny serwer.</p>
+            <h4 id="trivia-title">Local AI in your browser</h4>
+            <p id="trivia-text">OffChat runs every computation on your device only. Your messages, questions and answers never leave your browser or reach any external server.</p>
           </div>
         </div>
 
-        <!-- Zakładka 3: Szablony promptów -->
+        <!-- Tab 3: Prompt templates -->
         <div class="dl-tab-pane" id="pane-prompts">
           <div class="prompt-templates-list" id="prompt-templates-list"></div>
         </div>
 
-        <!-- Zakładka 4: Kolejkowanie pytania -->
+        <!-- Tab 4: Question queue -->
         <div class="dl-tab-pane" id="pane-queue">
           <div class="queue-card glass">
-            <h4>Napisz pierwsze pytanie już teraz</h4>
-            <p class="hint">Wpisz prompt, a OffChat wygeneruje odpowiedź automatycznie, jak tylko model załaduje się do pamięci.</p>
-            <textarea id="dl-queue-input" rows="3" placeholder="O co chcesz zapytać asystenta? (np. 'Wyjaśnij mi pojęcie sieci neuronowych na prostym przykładzie')"></textarea>
+            <h4>Write your first question now</h4>
+            <p class="hint">Type a prompt and OffChat will answer automatically as soon as the model loads into memory.</p>
+            <textarea id="dl-queue-input" rows="3" placeholder="What do you want to ask? (e.g. 'Explain neural networks with a simple example')"></textarea>
             <div class="row end">
               <button class="btn primary sm" id="btn-dl-queue-send">
-                <svg><use href="#i-send"/></svg> Dodaj do kolejki i zamknij
+                <svg><use href="#i-send"/></svg> Queue it &amp; close
               </button>
             </div>
           </div>
@@ -309,26 +319,26 @@
     </div>
   </div>
 
-  <!-- Pływający mini-widżet pobierania (Download Mini-Dock) -->
+  <!-- Floating download mini-widget -->
   <div class="dl-mini-dock glass" id="dl-mini-dock" hidden>
-    <div class="dl-mini-left" id="dl-mini-click" title="Kliknij, aby otworzyć pełne centrum pobierania z grami i ciekawostkami">
+    <div class="dl-mini-left" id="dl-mini-click" title="Click to open the full download hub with games and facts">
       <div class="dl-mini-icon-wrap">
         <svg class="dl-mini-spinner"><use href="#i-download"/></svg>
       </div>
       <div class="dl-mini-content">
         <div class="dl-mini-row">
-          <strong class="dl-mini-name" id="dl-mini-name">Model AI</strong>
+          <strong class="dl-mini-name" id="dl-mini-name">AI model</strong>
           <span class="dl-mini-pct" id="dl-mini-pct">0%</span>
         </div>
         <div class="dl-mini-bar"><i id="dl-mini-bar-fill"></i></div>
-        <div class="dl-mini-stats" id="dl-mini-stats">Łączenie…</div>
+        <div class="dl-mini-stats" id="dl-mini-stats">Connecting…</div>
       </div>
     </div>
     <div class="dl-mini-actions">
-      <button class="icon-btn sm" id="btn-mini-expand" title="Rozwiń (gry i ciekawostki)" aria-label="Rozwiń">
+      <button class="icon-btn sm" id="btn-mini-expand" title="Expand (games and facts)" aria-label="Expand">
         <svg><use href="#i-spark"/></svg>
       </button>
-      <button class="icon-btn sm" id="btn-mini-cancel" title="Anuluj pobieranie" aria-label="Anuluj">
+      <button class="icon-btn sm" id="btn-mini-cancel" title="Cancel download" aria-label="Cancel">
         <svg><use href="#i-x"/></svg>
       </button>
     </div>
@@ -336,7 +346,7 @@
 
   <noscript>
     <div style="padding:2rem;text-align:center;font-family:sans-serif">
-      OffChat wymaga włączonego JavaScriptu — cała magia dzieje się lokalnie w przeglądarce.
+      OffChat needs JavaScript enabled — all the magic happens locally in your browser.
     </div>
   </noscript>
 

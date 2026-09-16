@@ -1,7 +1,8 @@
 {
-  "name": "OffChat — prywatny czat AI w przeglądarce",
+  "name": "OffChat — private in-browser AI chat",
   "short_name": "OffChat",
-  "description": "Lekki czat z lokalnym modelem AI. 100% w przeglądarce, bez serwerów. Działa offline, nawet na słabych telefonach.",
+  "description": "Lightweight chat with a local AI model. 100% in your browser, no servers. Works offline, even on weak phones.",
+  "lang": "en",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
@@ -14,5 +15,22 @@
     { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "./icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "share_target": {
+    "action": "./",
+    "method": "GET",
+    "params": { "title": "title", "text": "text", "url": "url" }
+  },
+  "shortcuts": [
+    {
+      "name": "New chat",
+      "url": "./?new=1",
+      "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Choose model",
+      "url": "./?pick=1",
+      "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192" }]
+    }
   ]
 }

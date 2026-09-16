@@ -1,10 +1,10 @@
 // ─────────────────────────────────────────────────────────────
 // OffChat · sw.js — Service Worker: app-shell + CDN offline.
-// WAŻNE: wag modeli NIE cache'ujemy tutaj — robią to silniki
-// (WebLLM / Transformers.js) we własnych magazynach Cache API.
-// Podwójne cache'owanie marnowałoby setki MB na słabych telefonach.
+// IMPORTANT: model weights are NOT cached here — the engines
+// (WebLLM / Transformers.js) keep them in their own Cache API stores.
+// Double-caching would waste hundreds of MB on weak phones.
 // ─────────────────────────────────────────────────────────────
-const APP_CACHE = "offchat-shell-v3";
+const APP_CACHE = "offchat-shell-v5";
 const CDN_CACHE = "offchat-cdn-v1";
 
 const SHELL = [
@@ -31,8 +31,8 @@ const SHELL = [
   "./icons/favicon-32.png",
 ];
 
-// Hosty wag modeli i bibliotek modeli — przepuszczamy BEZ cache'owania,
-// żeby silniki zarządzały nimi samodzielnie (i nie dublować GB danych).
+// Model weight + model library hosts — passed through WITHOUT caching,
+// so the engines manage them on their own (and we never duplicate GBs).
 const MODEL_HOSTS = [
   "huggingface.co",
   "cdn-lfs.hf.co",
@@ -41,10 +41,10 @@ const MODEL_HOSTS = [
 const isModelHost = (host) =>
   MODEL_HOSTS.includes(host) || host.endsWith(".hf.co") || host.endsWith(".huggingface.co");
 
-// Hosty bibliotek JS silników — cache'ujemy agresywnie (wersje przypięte).
+// Engine JS library hosts — cached aggressively (pinned versions).
 const CDN_HOSTS = ["esm.sh", "cdn.jsdelivr.net", "unpkg.com"];
 
-// Cache'e silników — NIGDY nie usuwane przez SW.
+// Engine caches — NEVER deleted by the SW.
 const ENGINE_CACHE_RE = /webllm|mlc|transformers|onnx|hf-/i;
 
 self.addEventListener("install", (event) => {
@@ -64,8 +64,8 @@ self.addEventListener("activate", (event) => {
       await Promise.all(
         names.map((n) => {
           if (n === APP_CACHE || n === CDN_CACHE) return null;
-          if (ENGINE_CACHE_RE.test(n)) return null; // wagi modeli — święte
-          if (n.startsWith("offchat-")) return caches.delete(n); // stare wersje app
+          if (ENGINE_CACHE_RE.test(n)) return null; // model weights — sacred
+          if (n.startsWith("offchat-")) return caches.delete(n); // old app versions
           return null;
         })
       );
@@ -81,7 +81,7 @@ async function trimCache(name, maxEntries) {
     if (keys.length > maxEntries) {
       await Promise.all(keys.slice(0, keys.length - maxEntries).map((k) => cache.delete(k)));
     }
-  } catch { /* ignoruj */ }
+  } catch { /* ignore */ }
 }
 
 self.addEventListener("fetch", (event) => {
@@ -89,13 +89,13 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
 
-  // 1) Wagi modeli → prosto do sieci (silnik ma własny cache).
+  // 1) Model weights → straight to the network (the engine has its own cache).
   if (isModelHost(url.hostname)) {
     event.respondWith(fetch(req));
     return;
   }
 
-  // 2) Nawigacja → network-first, fallback do shell (offline działa!).
+  // 2) Navigation → network-first, shell fallback (offline works!).
   if (req.mode === "navigate") {
     event.respondWith(
       (async () => {
@@ -113,7 +113,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // 3) CDN silników → stale-while-revalidate.
+  // 3) Engine CDNs → stale-while-revalidate.
   if (CDN_HOSTS.includes(url.hostname)) {
     event.respondWith(
       (async () => {
@@ -134,7 +134,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // 4) Pliki własne (same-origin) → cache-first z odświeżeniem w tle.
+  // 4) Own files (same-origin) → cache-first with background refresh.
   if (url.origin === self.location.origin) {
     event.respondWith(
       (async () => {
@@ -152,7 +152,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // 5) Reszta (np. onnxruntime z innych CDN) → network-first + cache.
+  // 5) The rest (e.g. onnxruntime from other CDNs) → network-first + cache.
   event.respondWith(
     (async () => {
       try {
@@ -170,7 +170,7 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
-// Komunikaty z aplikacji (np. wymuszenie aktualizacji).
+// Messages from the app (e.g. forcing an update).
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
 });

@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────
-// OffChat · engine-proxy.js — fasada silnika.
-// Próbuje Web Workera (płynność UI); gdy worker niedostępny
-// (stara przeglądarka, CSP, file://), przechodzi na tryb bezpośredni.
-// API identyczne w obu trybach.
+// OffChat · engine-proxy.js — engine facade.
+// Tries a Web Worker (smooth UI); when the worker is unavailable
+// (old browser, CSP, file://), falls back to the main thread.
+// The API is identical in both modes.
 // ─────────────────────────────────────────────────────────────
 import { Engine } from "./engine.js";
 
@@ -26,7 +26,7 @@ export class EngineProxy {
   }
 
   async _init() {
-    // 1) próba workera
+    // 1) try the worker
     if (!this.workerBroken && typeof Worker !== "undefined") {
       try {
         const worker = new Worker(new URL("./llm-worker.js", import.meta.url), {
@@ -43,7 +43,7 @@ export class EngineProxy {
         this._breakWorker();
       }
     }
-    // 2) fallback: wątek główny
+    // 2) fallback: main thread
     this.direct = new Engine();
     this.mode = "direct";
     return "direct";
@@ -52,19 +52,19 @@ export class EngineProxy {
   _breakWorker() {
     this.workerBroken = true;
     this._stopWatchdog();
-    try { this.worker?.terminate(); } catch { /* ignoruj */ }
+    try { this.worker?.terminate(); } catch { /* ignore */ }
     this.worker = null;
     for (const [, p] of this.pending) {
-      p.reject(new Error("Worker silnika AI niedostępny."));
+      p.reject(new Error("AI engine worker is unavailable."));
     }
     this.pending.clear();
   }
 
   /**
-   * Watchdog: wyczuje cichą śmierć workera (crash/OOM bez onerror),
-   * dzięki czemu długie operacje (pobieranie, kompilacja) nie utkną
-   * "na zawsze" — po 2 nieudanych pingach przechodzimy na tryb
-   * bezpośredni i ponawiamy operację (wagi i tak siedzą w cache).
+   * Watchdog: senses a silent worker death (crash/OOM without onerror),
+   * so long operations (download, compile) never hang "forever" —
+   * after 2 failed pings we switch to direct mode and retry
+   * the operation (weights sit in the cache anyway).
    */
   _startWatchdog() {
     this._stopWatchdog();
@@ -102,14 +102,14 @@ export class EngineProxy {
     } else if (msg.event === "error") {
       this.pending.delete(msg.reqId);
       clearTimeout(p.timer);
-      p.reject(new Error(msg.data?.message || "Błąd silnika AI"));
+      p.reject(new Error(msg.data?.message || "AI engine error"));
     }
   }
 
   _workerCall(cmd, payload, { onProgress, onToken, timeoutMs = 0 } = {}) {
     return new Promise((resolve, reject) => {
       if (!this.worker) {
-        reject(new Error("Worker silnika AI niedostępny."));
+        reject(new Error("AI engine worker is unavailable."));
         return;
       }
       const reqId = ++this.reqSeq;
@@ -131,7 +131,7 @@ export class EngineProxy {
     });
   }
 
-  /** Wykonaj z automatycznym fallbackiem worker → direct. */
+  /** Run with automatic worker → direct fallback. */
   async _run(cmd, payload, handlers, directFn) {
     await this.init();
     if (this.mode === "worker" && !this.workerBroken) {
@@ -139,9 +139,9 @@ export class EngineProxy {
       try {
         return await this._workerCall(cmd, payload, handlers);
       } catch (e) {
-        // Twardy błąd workera (nie błąd modelu!) → przełącz na direct i ponów raz.
+        // Hard worker failure (not a model error!) → switch to direct and retry once.
         const msg = String(e?.message || "");
-        if (msg === "TIMEOUT" || msg.includes("niedostępny") || this.workerBroken) {
+        if (msg === "TIMEOUT" || msg.includes("unavailable") || this.workerBroken) {
           this._breakWorker();
           this.direct = new Engine();
           this.mode = "direct";
@@ -184,14 +184,14 @@ export class EngineProxy {
 
   async abort() {
     if (this.mode === "worker" && this.worker && !this.workerBroken) {
-      try { await this._workerCall("abort", {}, { timeoutMs: 3000 }); } catch { /* ignoruj */ }
+      try { await this._workerCall("abort", {}, { timeoutMs: 3000 }); } catch { /* ignore */ }
     }
     this.direct?.abort();
   }
 
   async unload() {
     if (this.mode === "worker" && this.worker && !this.workerBroken) {
-      try { await this._workerCall("unload", {}, { timeoutMs: 10000 }); } catch { /* ignoruj */ }
+      try { await this._workerCall("unload", {}, { timeoutMs: 10000 }); } catch { /* ignore */ }
     }
     await this.direct?.unload?.().catch(() => {});
   }
@@ -201,7 +201,7 @@ export class EngineProxy {
     if (this.mode === "worker" && this.worker && !this.workerBroken) {
       try {
         return await this._workerCall("state", {}, { timeoutMs: 5000 });
-      } catch { /* spadnij do direct */ }
+      } catch { /* fall through to direct */ }
     }
     return this.direct?.state?.() || { kind: null, modelId: null, loaded: false };
   }

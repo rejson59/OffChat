@@ -1,19 +1,20 @@
 // ─────────────────────────────────────────────────────────────
-// OffChat · hardware.js — wykrywanie możliwości urządzenia
-// i rekomendacja modelu mieszczącego się w limitach pamięci.
+// OffChat · hardware.js — device capability detection
+// and recommending a model that fits the memory limits.
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Sonda sprzętowa. Nigdy nie rzuca — zwraca best-effort raport.
- * Cel: telefon z 3 GB RAM musi DOSTAĆ model, który go nie wysypie.
+ * Hardware probe. Never throws — returns a best-effort report.
+ * Goal: a phone with 3 GB RAM must GET a model that won't crash it.
  */
 export async function probeHardware() {
   const ua = navigator.userAgent || "";
   const isIOS = /iPad|iPhone|iPod/.test(ua) ||
     (/Mac/.test(ua) && navigator.maxTouchPoints > 1);
   const isAndroid = /Android/.test(ua);
-  const coarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
-  const smallScreen = Math.min(screen.width || 9999, screen.height || 9999) < 768;
+  const coarse = globalThis.matchMedia?.("(pointer: coarse)").matches ?? false;
+  const scr = globalThis.screen || {};
+  const smallScreen = Math.min(scr.width || 9999, scr.height || 9999) < 768;
   const mobile = /Mobile|Android|iPhone|iPad/.test(ua) || (coarse && smallScreen);
 
   const hw = {
@@ -22,7 +23,7 @@ export async function probeHardware() {
     ramGB: 4, ramSource: "estimate",
     webgpu: { supported: false, f16: false, maxBufferMB: 0, name: "", reason: "" },
     storage: null, connection: null,
-    crossIsolated: !!window.crossOriginIsolated,
+    crossIsolated: !!globalThis.crossOriginIsolated,
     serviceWorker: "serviceWorker" in navigator,
     worker: typeof Worker !== "undefined",
     opfs: !!navigator.storage?.getDirectory,
@@ -34,7 +35,7 @@ export async function probeHardware() {
     hw.ramGB = navigator.deviceMemory;
     hw.ramSource = "deviceMemory";
   } else {
-    // Brak API (Firefox/Safari) → ostrożne założenie wg klasy urządzenia.
+    // No API (Firefox/Safari) → cautious assumption by device class.
     hw.ramGB = mobile ? 4 : 8;
     hw.ramSource = "estimate";
   }
@@ -56,18 +57,18 @@ export async function probeHardware() {
         try {
           const info = adapter.info || null; // Chrome: GPUAdapterInfo
           if (info) hw.webgpu.name = info.device || info.description || "";
-        } catch { /* ignoruj */ }
+        } catch { /* ignore */ }
       } else {
-        hw.webgpu.reason = "Brak adaptera WebGPU";
+        hw.webgpu.reason = "No WebGPU adapter";
       }
     } else {
-      hw.webgpu.reason = "Przeglądarka nie wspiera WebGPU";
+      hw.webgpu.reason = "Browser has no WebGPU support";
     }
   } catch (e) {
     hw.webgpu.reason = String(e?.message || e);
   }
 
-  // --- Storage (miejsce na cache modeli) ---
+  // --- Storage (room for the model cache) ---
   try {
     if (navigator.storage?.estimate) {
       const est = await navigator.storage.estimate();
@@ -77,9 +78,9 @@ export async function probeHardware() {
         freeMB: Math.round(((est.quota || 0) - (est.usage || 0)) / 1048576),
       };
     }
-  } catch { /* ignoruj */ }
+  } catch { /* ignore */ }
 
-  // --- Sieć (oszczędzanie danych) ---
+  // --- Network (data saver) ---
   try {
     const c = navigator.connection;
     if (c) {
@@ -89,15 +90,27 @@ export async function probeHardware() {
         downlink: c.downlink || 0,
       };
     }
-  } catch { /* ignoruj */ }
+  } catch { /* ignore */ }
 
   return hw;
 }
 
 /**
- * Budżet pamięci (MB) na wagi+KV cache modelu.
- * Konserwatywnie: karta mobilna wysypuje się zwykle przy ~1–1.5 GB,
- * desktopowy Chrome przy ~4 GB na kartę. Zostawiamy duży margines.
+ * Is this a weak, crash-prone device? Used by Safe Mode ("auto")
+ * to pre-emptively simplify visuals and cap memory usage.
+ */
+export function isWeakDevice(hw) {
+  if (!hw) return false;
+  if (hw.mobile && (hw.ramGB <= 3 || hw.cores <= 4)) return true;
+  // No GPU at all + little RAM → the CPU path is also fragile.
+  if (!hw.webgpu.supported && hw.mobile && hw.ramGB <= 4) return true;
+  return false;
+}
+
+/**
+ * Memory budget (MB) for model weights + KV cache.
+ * Conservative: a mobile GPU usually crashes around ~1–1.5 GB,
+ * desktop Chrome around ~4 GB per tab. We keep a wide margin.
  */
 export function computeBudgetMB(hw) {
   const ram = hw.ramGB || 4;
@@ -106,7 +119,7 @@ export function computeBudgetMB(hw) {
     if (ram >= 8) budget = 2600;
     else if (ram >= 6) budget = 2200;
     else if (ram >= 4) budget = 1750;
-    else budget = 1050; // 3 GB i mniej — tylko maluchy
+    else budget = 1050; // 3 GB and less — tiny models only
   } else {
     if (ram >= 16) budget = 5200;
     else if (ram >= 12) budget = 4600;
@@ -120,8 +133,8 @@ export function computeBudgetMB(hw) {
 }
 
 function scoreWeb(m) {
-  // Sortowanie rekomendacji: polski → stabilność → większy (lepszy) model.
-  return [m.pl, m.stable ? 1 : 0, m.vramMB];
+  // Recommendation order: quality → stability → bigger (better) model.
+  return [m.quality, m.stable ? 1 : 0, m.vramMB];
 }
 
 function cmpScore(a, b) {
@@ -133,8 +146,8 @@ function cmpScore(a, b) {
 }
 
 /**
- * Rekomendacja modeli: zwraca budżet, rekomendowany klucz,
- * ranking oraz ostrzeżenia do wyświetlenia użytkownikowi.
+ * Model recommendation: returns the budget, the recommended key,
+ * a ranking and warnings to show the user.
  */
 export function recommendModels(hw, webCatalog, wasmCatalog) {
   const budgetMB = computeBudgetMB(hw);
@@ -143,41 +156,47 @@ export function recommendModels(hw, webCatalog, wasmCatalog) {
   if (!hw.webgpu.supported) {
     warnings.push({
       icon: "warn",
-      text: "To urządzenie/przeglądarka nie ma WebGPU — użyjemy wolniejszego silnika CPU (WASM). " +
-        "Na Androidzie polecamy Chrome 121+, na komputerze Chrome/Edge 113+.",
+      text: "This device/browser has no WebGPU — we will use the slower CPU engine (WASM). " +
+        "On Android we recommend Chrome 121+, on desktop Chrome/Edge 113+.",
     });
   } else if (!hw.webgpu.f16) {
     warnings.push({
       icon: "info",
-      text: "Twoje GPU nie wspiera shader-f16 — modele oznaczone F16 przełączą się automatycznie na wariant q4f32.",
+      text: "Your GPU has no shader-f16 support — F16 models will automatically switch to a q4f32 build.",
     });
   }
   if (hw.ramSource === "estimate") {
     warnings.push({
       icon: "info",
-      text: `Przeglądarka nie zdradza ilości RAM — przyjęliśmy ostrożnie ~${hw.ramGB} GB. ` +
-        "Możesz ręcznie wybrać większy model.",
+      text: `Your browser doesn't report RAM size — we cautiously assumed ~${hw.ramGB} GB. ` +
+        "You can still pick a bigger model manually.",
     });
   }
   if (hw.storage && hw.storage.freeMB > 0 && hw.storage.freeMB < 1500) {
     warnings.push({
       icon: "warn",
-      text: `Mało wolnego miejsca (${hw.storage.freeMB} MB) — większe modele mogą się nie pobrać.`,
+      text: `Low free space (${hw.storage.freeMB} MB) — bigger models may fail to download.`,
     });
   }
   if (hw.connection?.saveData) {
     warnings.push({
       icon: "info",
-      text: "Wykryto tryb oszczędzania danych — polecamy najmniejsze modele.",
+      text: "Data-saver mode detected — we recommend the smallest models.",
+    });
+  }
+  if (isWeakDevice(hw)) {
+    warnings.push({
+      icon: "warn",
+      text: "This looks like a low-end device — Safe Mode is recommended (simplified visuals, smaller memory footprint).",
     });
   }
 
-  // --- Ścieżka WASM (brak WebGPU) ---
+  // --- WASM path (no WebGPU) ---
   if (!hw.webgpu.supported) {
     const fits = (m) => m.vramMB * 1.1 <= budgetMB;
     const ranked = [...wasmCatalog].sort((a, b) => {
-      // preferuj dobry polski, potem mniejszy (szybszy na CPU)
-      if (b.pl !== a.pl) return b.pl - a.pl;
+      // Prefer better quality, then smaller (faster on CPU).
+      if (b.quality !== a.quality) return b.quality - a.quality;
       return a.vramMB - b.vramMB;
     });
     const ok = ranked.filter(fits);
@@ -188,24 +207,24 @@ export function recommendModels(hw, webCatalog, wasmCatalog) {
     };
   }
 
-  // --- Ścieżka WebGPU ---
-  // needsF16 nie dyskwalifikuje — silnik sam podmieni wariant f32
-  // (q4f16_1→q4f32_1 / q0f16→q0f32) przy braku shader-f16.
+  // --- WebGPU path ---
+  // needsF16 doesn't disqualify — the engine swaps in an f32 build
+  // (q4f16_1→q4f32_1 / q0f16→q0f32) when shader-f16 is missing.
   const fits = (m) => m.vramMB * 1.12 <= budgetMB;
 
   const ranked = [...webCatalog].sort(cmpScore);
   const ok = ranked.filter((m) => m.vramMB * 1.12 <= budgetMB);
   let recommended;
   if (ok.length) {
-    // Najlepszy polski w budżecie; przy remisie stabilny i większy.
+    // Best quality within budget; ties broken by stability and size.
     recommended = ok[0].key;
   } else {
-    // Nic się nie mieści (skrajny przypadek) — najmniejszy + ostrzeżenie.
+    // Nothing fits (extreme edge case) — smallest + a warning.
     const smallest = [...webCatalog].sort((a, b) => a.vramMB - b.vramMB)[0];
     recommended = smallest.key;
     warnings.push({
       icon: "warn",
-      text: "Bardzo mało pamięci — wybraliśmy najmniejszy model. Zamknij inne karty, by uniknąć wysypania strony.",
+      text: "Very little memory — we picked the smallest model. Close other tabs to avoid crashing the page.",
     });
   }
   return {
@@ -214,18 +233,26 @@ export function recommendModels(hw, webCatalog, wasmCatalog) {
   };
 }
 
-/** Kontekst KV dla oszczędzania pamięci (0 = domyślny modelu). */
-export function suggestContextWindow(hw, model, memorySaver) {
-  if (!memorySaver) return 0;
+/**
+ * KV context window for memory saving (0 = the model's default).
+ * `ctxCap` comes from Settings: auto | 1024 | 2048 | 4096 | full.
+ */
+export function suggestContextWindow(hw, model, ctxCap = "auto", safeActive = false) {
+  if (ctxCap === "full") return 0;
+  if (ctxCap === "1024" || ctxCap === "2048" || ctxCap === "4096") {
+    return Number(ctxCap);
+  }
+  // Auto: be gentle on phones, low-RAM devices and Safe Mode.
   if (model.engine !== "webllm") return 2048;
+  if (safeActive) return 2048;
   if (hw.mobile || hw.ramGB <= 4) return 2048;
   return 0;
 }
 
 export function deviceSummary(hw) {
   const parts = [];
-  parts.push(hw.mobile ? (hw.isIOS ? "iPhone/iPad" : hw.isAndroid ? "Android" : "Mobile") : "Komputer");
-  parts.push(`${hw.cores} rdzeni CPU`);
+  parts.push(hw.mobile ? (hw.isIOS ? "iPhone/iPad" : hw.isAndroid ? "Android" : "Mobile") : "Computer");
+  parts.push(`${hw.cores} CPU cores`);
   parts.push(`~${hw.ramGB} GB RAM`);
   parts.push(hw.webgpu.supported ? `WebGPU ✓${hw.webgpu.f16 ? " + F16" : ""}` : "WebGPU ✗ → WASM");
   return parts.join(" · ");
