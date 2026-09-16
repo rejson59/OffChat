@@ -189,9 +189,9 @@ export function recommendModels(hw, webCatalog, wasmCatalog) {
   }
 
   // --- Ścieżka WebGPU ---
-  const fits = (m) =>
-    m.vramMB * 1.12 <= budgetMB && (!m.needsF16 || hw.webgpu.f16 || true);
-  // NOTE: needsF16 nie dyskwalifikuje — silnik sam podmieni wariant q4f32.
+  // needsF16 nie dyskwalifikuje — silnik sam podmieni wariant f32
+  // (q4f16_1→q4f32_1 / q0f16→q0f32) przy braku shader-f16.
+  const fits = (m) => m.vramMB * 1.12 <= budgetMB;
 
   const ranked = [...webCatalog].sort(cmpScore);
   const ok = ranked.filter((m) => m.vramMB * 1.12 <= budgetMB);

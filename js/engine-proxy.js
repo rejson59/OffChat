@@ -15,6 +15,8 @@ export class EngineProxy {
     this.pending = new Map();
     this.initPromise = null;
     this.workerBroken = false;
+    this._wdTimer = null;
+    this._wdFails = 0;
   }
 
   init() {
@@ -49,12 +51,42 @@ export class EngineProxy {
 
   _breakWorker() {
     this.workerBroken = true;
+    this._stopWatchdog();
     try { this.worker?.terminate(); } catch { /* ignoruj */ }
     this.worker = null;
     for (const [, p] of this.pending) {
       p.reject(new Error("Worker silnika AI niedostępny."));
     }
     this.pending.clear();
+  }
+
+  /**
+   * Watchdog: wyczuje cichą śmierć workera (crash/OOM bez onerror),
+   * dzięki czemu długie operacje (pobieranie, kompilacja) nie utkną
+   * "na zawsze" — po 2 nieudanych pingach przechodzimy na tryb
+   * bezpośredni i ponawiamy operację (wagi i tak siedzą w cache).
+   */
+  _startWatchdog() {
+    this._stopWatchdog();
+    if (!this.worker || this.workerBroken) return;
+    this._wdFails = 0;
+    this._wdTimer = setInterval(() => {
+      if (!this.worker || this.workerBroken) {
+        this._stopWatchdog();
+        return;
+      }
+      this._workerCall("ping", {}, { timeoutMs: 12000 }).catch(() => {
+        this._wdFails++;
+        if (this._wdFails >= 2) this._breakWorker();
+      });
+    }, 20000);
+  }
+
+  _stopWatchdog() {
+    if (this._wdTimer) {
+      clearInterval(this._wdTimer);
+      this._wdTimer = null;
+    }
   }
 
   _onMessage(msg) {
@@ -103,6 +135,7 @@ export class EngineProxy {
   async _run(cmd, payload, handlers, directFn) {
     await this.init();
     if (this.mode === "worker" && !this.workerBroken) {
+      this._startWatchdog();
       try {
         return await this._workerCall(cmd, payload, handlers);
       } catch (e) {
@@ -115,6 +148,8 @@ export class EngineProxy {
         } else {
           throw e;
         }
+      } finally {
+        if (!this.workerBroken) this._stopWatchdog();
       }
     }
     return directFn(this.direct);

@@ -671,7 +671,7 @@ export class DownloadHub {
   }
 
   startGame() {
-    if (!this.canvas) return;
+    if (!this.canvas || !this.ctx) return; // brak 2D contextu (CSP/restrykcje) — gra off, reszta działa
     this.resetGame(true);
     this.gameRunning = true;
     this.gamePaused = false;

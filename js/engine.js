@@ -54,6 +54,37 @@ function mapTFProgress(p, dtype) {
   return { phase: "load", progress: 0.5, text: `${p.status || "ładowanie"}: ${short}` };
 }
 
+/**
+ * Znalezienie wariantu f32 tego samego modelu (gdy GPU nie ma shader-f16).
+ * Np. "Llama-3.2-1B-Instruct-q4f16_1-MLC" → "…-q4f32_1-MLC",
+ *     "SmolLM2-135M-Instruct-q0f16-MLC"   → "…-q0f32-MLC".
+ * Dokładnie zachowuje sufiks (-MLC / -MLC-1k), więc model 1k nie zamieni
+ * się nigdy w wariant 4k (i odwrotnie).
+ */
+function findF32Sibling(list, modelId) {
+  // Szybka ścieżka: klasyczna podmiana q4f16_1 → q4f32_1
+  const quickId = modelId.replace("q4f16_1", "q4f32_1");
+  if (quickId !== modelId) {
+    const quick = list.find((r) => r.model_id === quickId);
+    if (quick) return quick;
+  }
+  // Ogólna ścieżka: ta sama baza nazwy + ten sam sufiks + dowolny wariant f32
+  const m = modelId.match(/^(.*?)(?:q\d?f\d+(?:_\d+)?)(-MLC.*)?$/);
+  if (!m || !m[1]) return null;
+  const base = m[1];
+  const suffix = m[2] || "";
+  const sibs = list.filter(
+    (r) =>
+      r.model_id !== modelId &&
+      r.model_id.startsWith(base + "q") &&
+      r.model_id.endsWith(suffix) &&
+      /f32/.test(r.model_id)
+  );
+  if (!sibs.length) return null;
+  // Preferuj wariant q4f32 (zwykle mniejszy niż q0f32), potem dowolny
+  return sibs.find((r) => /q4f32/.test(r.model_id)) || sibs[0];
+}
+
 export class Engine {
   constructor() {
     this.kind = null;       // 'webllm' | 'transformers' | null
@@ -93,12 +124,12 @@ export class Engine {
       );
     }
     // Automatyczna podmiana wariantu, gdy GPU nie ma shader-f16.
+    // Obsługuje wszystkie schematy nazw: q4f16_1→q4f32_1, q4f16→q4f32, q0f16→q0f32.
     if (rec.required_features?.includes("shader-f16") && !hasF16) {
-      const sibId = modelId.replace("q4f16_1", "q4f32_1");
-      const sib = list.find((r) => r.model_id === sibId);
+      const sib = findF32Sibling(list, modelId);
       if (sib) {
         rec = sib;
-        modelId = sibId;
+        modelId = sib.model_id;
       } else {
         throw new Error(
           "Twoje GPU nie wspiera shader-f16, a model nie ma wariantu zastępczego. Wybierz inny model."

@@ -186,11 +186,12 @@ export const Threads = {
 };
 
 async function pruneThreads() {
-  const list = await Threads.list();
+  const list = await Threads.list(); // sortowane od najnowszych
   if (list.length <= LIMITS.maxThreads) return;
-  const victims = list
-    .filter((t) => !t.pinned)
-    .slice(LIMITS.maxThreads - list.filter((t) => t.pinned).length);
+  // Wykasuj NAJSTARSZE rozmowy bez przypinki (koniec listy nieprzypiętych).
+  const unpinned = list.filter((t) => !t.pinned);
+  const excess = Math.min(unpinned.length, list.length - LIMITS.maxThreads);
+  const victims = unpinned.slice(unpinned.length - excess);
   for (const t of victims) {
     try { await Threads.remove(t.id); } catch { /* ignoruj */ }
   }

@@ -4,7 +4,7 @@
 // (WebLLM / Transformers.js) we własnych magazynach Cache API.
 // Podwójne cache'owanie marnowałoby setki MB na słabych telefonach.
 // ─────────────────────────────────────────────────────────────
-const APP_CACHE = "offchat-shell-v2";
+const APP_CACHE = "offchat-shell-v3";
 const CDN_CACHE = "offchat-cdn-v1";
 
 const SHELL = [
@@ -25,6 +25,9 @@ const SHELL = [
   "./js/ui.js",
   "./icons/icon.svg",
   "./icons/icon-192.png",
+  "./icons/icon-512.png",
+  "./icons/maskable-512.png",
+  "./icons/apple-touch-icon.png",
   "./icons/favicon-32.png",
 ];
 
@@ -39,7 +42,7 @@ const isModelHost = (host) =>
   MODEL_HOSTS.includes(host) || host.endsWith(".hf.co") || host.endsWith(".huggingface.co");
 
 // Hosty bibliotek JS silników — cache'ujemy agresywnie (wersje przypięte).
-const CDN_HOSTS = ["esm.sh", "cdn.jsdelivr.net", "unpkg.com", "cdn.jsdelivr.net"];
+const CDN_HOSTS = ["esm.sh", "cdn.jsdelivr.net", "unpkg.com"];
 
 // Cache'e silników — NIGDY nie usuwane przez SW.
 const ENGINE_CACHE_RE = /webllm|mlc|transformers|onnx|hf-/i;
