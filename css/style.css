@@ -183,8 +183,10 @@ body.safe {
   background-image:
     radial-gradient(120% 80% at 12% -10%, rgba(124, 58, 237, 0.30), transparent 62%),
     radial-gradient(100% 75% at 92% 105%, rgba(34, 211, 238, 0.18), transparent 60%);
-  background-attachment: fixed;
   background-repeat: no-repeat;
+  /* No background-attachment: fixed — on mobile it forces a repaint on
+     every scroll frame. The page itself does not scroll, so the gradient
+     already stays put. */
 }
 body.safe[data-theme="light"] {
   background-image:
