@@ -57,6 +57,7 @@ const S = {
   crashRecovery: null,   // a generation that a previous session died on
   hiddenAt: 0,
   lastIdleTouch: 0,
+  slowHintShown: false,
 };
 
 /**
@@ -130,11 +131,25 @@ function whenIdle(fn, timeout = 1000) {
 }
 
 // ── Message cache (weak devices: avoid re-reading IndexedDB constantly) ──
+// Only a few threads are kept in memory — a chat with hundreds of long
+// answers is megabytes, and a weak phone has none to spare.
+const MAX_CACHED_THREADS = 4;
+
 async function getMessages(threadId, { refresh = false } = {}) {
   if (!threadId) return [];
-  if (!refresh && S.msgCache.has(threadId)) return S.msgCache.get(threadId);
+  if (!refresh && S.msgCache.has(threadId)) {
+    const cached = S.msgCache.get(threadId);
+    S.msgCache.delete(threadId); // re-insert = most recently used
+    S.msgCache.set(threadId, cached);
+    return cached;
+  }
   const list = await Messages.list(threadId, 1000).catch(() => []);
   S.msgCache.set(threadId, list);
+  while (S.msgCache.size > MAX_CACHED_THREADS) {
+    const oldest = S.msgCache.keys().next().value;
+    if (oldest === threadId) break;
+    S.msgCache.delete(oldest);
+  }
   return list;
 }
 
@@ -1026,6 +1041,19 @@ async function onSend() {
   await generateReply();
 }
 
+/**
+ * The fastest stable model that is clearly smaller than the current one —
+ * used to nudge the user when their device is crawling.
+ */
+function fasterAlternative(model) {
+  const pool = (model.engine === "webllm" ? MODEL_CATALOG : WASM_CATALOG)
+    .filter((m) => m.key !== model.key && m.stable !== false && m.sizeMB < model.sizeMB);
+  if (!pool.length) return null;
+  pool.sort((a, b) => (b.tps?.[1] || 0) - (a.tps?.[1] || 0));
+  const best = pool[0];
+  return (best.tps?.[1] || 0) > (model.tps?.[1] || 0) ? best : null;
+}
+
 /** Keep one oversized message from eating the whole context window. */
 function tailChars(text, maxChars) {
   if (text.length <= maxChars) return text;
@@ -1228,6 +1256,17 @@ async function generateReply(opts = {}) {
     updateCtxInfo(S.msgCache.get(S.activeId) || []);
     await refreshThreads();
     setStatus("ready", S.model.name + (navigator.onLine ? "" : " · offline"));
+
+    // Very slow generation? Suggest a lighter model — once per session.
+    if (!res.aborted && res.tokPerSec && res.tokPerSec < 3 && !S.slowHintShown && S.model) {
+      const faster = fasterAlternative(S.model);
+      if (faster) {
+        S.slowHintShown = true;
+        setTimeout(() => {
+          toast(`That answer ran at ~${res.tokPerSec} tok/s — ${faster.name} would feel much snappier on this device.`, "info", 9000);
+        }, 1200);
+      }
+    }
   } catch (e) {
     console.error(e);
     if (mid) {

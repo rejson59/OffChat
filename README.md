@@ -31,6 +31,7 @@ A lightweight, static chat with a Small Language Model running 100% client-side.
 - ⚡ **Built for weak devices** — incremental streaming renderer, batched token streaming, message cache, deferred boot, lazy modules (see below)
 - 🧠 **Idle memory release** — the model frees GPU/RAM memory when you stop using it (auto: 6 min on phones, 30 min on desktop), which prevents the OOM kills that make mobile browsers drop tabs
 - 💾 **Crash-proof work** — the unsent draft and every streaming answer are mirrored to storage, so a crash/reload never loses what you typed or waited for; interrupted answers come back with a **Continue** button
+- 🐢 **Slow-model tips** — when an answer crawls (under ~3 tok/s) OffChat suggests a lighter model that will feel faster on that device
 - 🛠️ **Self-healing engine** — if the Worker or the GPU dies mid-answer, the app rebuilds the engine, reloads the model from cache and retries the message instead of failing
 
 ## 🗂️ File structure
