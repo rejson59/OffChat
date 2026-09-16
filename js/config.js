@@ -60,11 +60,21 @@ export const TIERS = {
  */
 export const MODEL_CATALOG = [
   {
+    key: "smol135", engine: "webllm",
+    modelId: "SmolLM2-135M-Instruct-q4f16_1-MLC",
+    name: "SmolLM2 135M", family: "SmolLM2", params: "0,14 mld",
+    sizeMB: 100, vramMB: 280, ctx: 2048, pl: 2, tier: "ultra",
+    needsF16: true, stable: true,
+    estDl: "~5–10 s",
+    blurb: "Błyskawiczny start! Tylko ~100 MB — pobiera się w kilka sekund, działa nawet na najsłabszym telefonie.",
+  },
+  {
     key: "smol360", engine: "webllm",
     modelId: "SmolLM2-360M-Instruct-q4f16_1-MLC",
     name: "SmolLM2 360M", family: "SmolLM2", params: "0,36 mld",
     sizeMB: 260, vramMB: 376, ctx: 4096, pl: 2, tier: "ultra",
     needsF16: true, stable: true,
+    estDl: "~12–20 s",
     blurb: "Ekspresowy i mikroskopijny. Polski podstawowy, ale ruszy dosłownie wszędzie.",
   },
   {
@@ -73,6 +83,7 @@ export const MODEL_CATALOG = [
     name: "Llama 3.2 1B", family: "Llama", params: "1 mld",
     sizeMB: 800, vramMB: 879, ctx: 4096, pl: 4, tier: "mini",
     needsF16: false, stable: true,
+    estDl: "~35–55 s",
     blurb: "Zaskakująco dobry polski jak na 1 mld parametrów. Faworyt na słabsze telefony.",
   },
   {
@@ -81,6 +92,7 @@ export const MODEL_CATALOG = [
     name: "Qwen 2.5 0.5B", family: "Qwen", params: "0,5 mld",
     sizeMB: 460, vramMB: 944, ctx: 4096, pl: 4, tier: "mini",
     needsF16: false, stable: true,
+    estDl: "~20–30 s",
     blurb: "Malutki, a mówi po polsku płynnie. Świetny stosunek jakości do rozmiaru.",
   },
   {
@@ -89,6 +101,7 @@ export const MODEL_CATALOG = [
     name: "Qwen 3 0.6B", family: "Qwen", params: "0,6 mld",
     sizeMB: 600, vramMB: 1403, ctx: 4096, pl: 4, tier: "smart",
     needsF16: false, stable: false,
+    estDl: "~25–40 s",
     blurb: "Nowsza generacja Qwen (wariant bazowy). Eksperymentalny — czasem wymaga doprecyzowania.",
   },
   {
@@ -97,6 +110,7 @@ export const MODEL_CATALOG = [
     name: "Gemma 2 2B (1k)", family: "Gemma", params: "2 mld",
     sizeMB: 1500, vramMB: 1583, ctx: 1024, pl: 4, tier: "smart",
     needsF16: true, stable: true,
+    estDl: "~1–1,5 min",
     blurb: "Model Google o skróconym kontekście 1k — mniej pamięci, wciąż ładny polski.",
   },
   {
@@ -105,6 +119,7 @@ export const MODEL_CATALOG = [
     name: "Qwen 2.5 1.5B", family: "Qwen", params: "1,5 mld",
     sizeMB: 1000, vramMB: 1629, ctx: 4096, pl: 5, tier: "smart",
     needsF16: false, stable: true,
+    estDl: "~45–70 s",
     blurb: "Król średniej wagi: piękny, naturalny polski, instrukcje, streszczenia, kod.",
   },
   {
@@ -113,6 +128,7 @@ export const MODEL_CATALOG = [
     name: "SmolLM2 1.7B", family: "SmolLM2", params: "1,7 mld",
     sizeMB: 1100, vramMB: 1774, ctx: 4096, pl: 3, tier: "smart",
     needsF16: true, stable: true,
+    estDl: "~50–80 s",
     blurb: "Bardzo szybki i sprawny w rozumowaniu. Polski dobry, choć nie idealny.",
   },
   {
@@ -121,6 +137,7 @@ export const MODEL_CATALOG = [
     name: "Gemma 2 2B", family: "Gemma", params: "2 mld",
     sizeMB: 1500, vramMB: 1895, ctx: 4096, pl: 4, tier: "pro",
     needsF16: true, stable: true,
+    estDl: "~1–1,5 min",
     blurb: "Pełny kontekst 4k. Kulturalny, spójny polski, dobra wiedza ogólna.",
   },
   {
@@ -129,6 +146,7 @@ export const MODEL_CATALOG = [
     name: "Qwen 3 1.7B", family: "Qwen", params: "1,7 mld",
     sizeMB: 1300, vramMB: 2036, ctx: 4096, pl: 5, tier: "pro",
     needsF16: false, stable: false,
+    estDl: "~1–1,5 min",
     blurb: "Nowa generacja, wariant bazowy. Eksperymentalny, potrafi zachwycić jakością.",
   },
   {
@@ -137,6 +155,7 @@ export const MODEL_CATALOG = [
     name: "Llama 3.2 3B", family: "Llama", params: "3 mld",
     sizeMB: 2000, vramMB: 2263, ctx: 4096, pl: 5, tier: "pro",
     needsF16: false, stable: true,
+    estDl: "~1,5–2,5 min",
     blurb: "Złoty środek dla polskiego: płynny, logiczny, świetny do dłuższych tekstów.",
   },
   {
@@ -145,6 +164,7 @@ export const MODEL_CATALOG = [
     name: "Phi 3.5 mini (1k)", family: "Phi", params: "3,8 mld",
     sizeMB: 2300, vramMB: 2520, ctx: 1024, pl: 3, tier: "pro",
     needsF16: false, stable: true,
+    estDl: "~2–3 min",
     blurb: "Genialny w logice i kodzie, trening głównie angielski — polski poprawny.",
   },
   {
@@ -153,6 +173,7 @@ export const MODEL_CATALOG = [
     name: "Qwen 3 4B", family: "Qwen", params: "4 mld",
     sizeMB: 2600, vramMB: 3431, ctx: 4096, pl: 5, tier: "max",
     needsF16: false, stable: false,
+    estDl: "~2–3,5 min",
     blurb: "Duży i bystry (wariant bazowy, eksperymentalny). Na mocne komputery.",
   },
   {
@@ -161,6 +182,7 @@ export const MODEL_CATALOG = [
     name: "Llama 3.1 8B (1k)", family: "Llama", params: "8 mld",
     sizeMB: 4900, vramMB: 4598, ctx: 1024, pl: 5, tier: "max",
     needsF16: false, stable: true,
+    estDl: "~4–6 min",
     blurb: "Największy w ofercie. Poziom prawie desktopowego asystenta — tylko na PC.",
   },
 ];
@@ -176,6 +198,7 @@ export const WASM_CATALOG = [
     name: "SmolLM2 135M", family: "SmolLM2", params: "135 mln",
     sizeMB: 90, vramMB: 350, ctx: 2048, pl: 2, tier: "wasm",
     dtypes: ["q4f16", "q4", "q8"], stable: true,
+    estDl: "~5–8 s",
     blurb: "Najlżejszy tryb awaryjny. Proste odpowiedzi, minimalne wymagania.",
   },
   {
@@ -184,6 +207,7 @@ export const WASM_CATALOG = [
     name: "SmolLM2 360M", family: "SmolLM2", params: "360 mln",
     sizeMB: 230, vramMB: 600, ctx: 2048, pl: 2, tier: "wasm",
     dtypes: ["q4f16", "q4", "q8"], stable: true,
+    estDl: "~12–18 s",
     blurb: "Zbalansowany tryb CPU: rozsądna szybkość i jakość na słabym sprzęcie.",
   },
   {
@@ -192,6 +216,7 @@ export const WASM_CATALOG = [
     name: "Qwen 2.5 0.5B", family: "Qwen", params: "0,5 mld",
     sizeMB: 450, vramMB: 900, ctx: 2048, pl: 4, tier: "wasm",
     dtypes: ["q4f16", "q4", "q8"], stable: true,
+    estDl: "~20–30 s",
     blurb: "Najlepszy polski w trybie CPU. Wolniejszy, ale mówi pięknie.",
   },
   {
@@ -200,6 +225,7 @@ export const WASM_CATALOG = [
     name: "Llama 3.2 1B", family: "Llama", params: "1 mld",
     sizeMB: 750, vramMB: 1300, ctx: 2048, pl: 4, tier: "wasm",
     dtypes: ["q4f16", "q4", "q8"], stable: true,
+    estDl: "~35–50 s",
     blurb: "Najmocniejszy tryb CPU — tylko dla cierpliwych i mocniejszych procesorów.",
   },
 ];

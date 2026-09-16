@@ -17,7 +17,10 @@ Lekki, statyczny czat ze Small Language Model działającym w 100% po stronie kl
 - 📦 **Offline** — wagi w Cache API (lub OPFS), app-shell + biblioteki w Service Workerze
 - 💾 **Trwałość** — wątki w IndexedDB, ustawienia w localStorage, eksport/import JSON
 - 🪟 **Szklany UI** — glassmorphism, gradienty, płynne animacje, motyw jasny/ciemny, PWA
-- 📊 **Status na żywo** — „Pobieranie modelu”, „Ładowanie do pamięci”, „Gotowy do rozmowy”, „Generowanie…” + tok/s
+- 📊 **Status na żywo & Telemetria** — „Pobieranie modelu”, „Ładowanie do pamięci”, prędkość (MB/s), czas ETA, pobrane MB oraz tok/s
+- 🚀 **Błyskawiczny start i filtry** — ultra-lekkie modele (< 150 MB), preconnect do serwerów CDN, filtry prędkości i persistent storage
+- 🎮 **Centrum pobierania & Mini-gra** — zminimalizuj pobieranie do pływającego doku, przeglądaj czat i historię, zagraj w neonowego NeuroPonga lub czytaj ciekawostki o AI
+- ⚡ **Kolejkowanie promptów** — napisz pytanie już w trakcie pobierania; odpowiedź wygeneruje się automatycznie po załadowaniu!
 
 ## 🗂️ Struktura plików
 
@@ -34,6 +37,7 @@ OffChat/
 ├── js/
 │   ├── app.js              # orkiestracja: boot, onboarding, czat, wątki, ustawienia
 │   ├── config.js           # wersje silników, katalog modeli, domyślne ustawienia
+│   ├── download-hub.js     # telemetria pobierania, pływający dok, mini-gra NeuroPong, ciekawostki AI, szablony
 │   ├── hardware.js         # sonda sprzętu + rekomendacje + budżet pamięci
 │   ├── storage.js          # localStorage + IndexedDB + eksport/import + cache modeli
 │   ├── engine.js           # silnik inference (WebLLM + Transformers.js, ładowany leniwie)
