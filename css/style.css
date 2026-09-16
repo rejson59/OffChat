@@ -49,6 +49,11 @@ body[data-theme="light"] {
 }
 
 /* ── Reset (celowany, bez *) ───────────────────────────────── */
+/* Atrybut hidden MUSI chować element — reguły display:* w tym
+   pliku (np. .dl-overlay, .dl-mini-dock, .offline-banner, .icon-btn)
+   w przeciwnym razie przykrywają go i blokują całą stronę. */
+[hidden] { display: none !important; }
+
 html, body { height: 100%; }
 body, h1, h2, h3, h4, p, ul, ol, blockquote, pre, figure, textarea, input, button {
   margin: 0; padding: 0;

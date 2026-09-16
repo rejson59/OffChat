@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 export const APP_NAME = "OffChat";
-export const APP_VERSION = "1.0.0";
+export const APP_VERSION = "1.0.1";
 
 /**
  * Przypięte wersje silników AI (immutable buildy na CDN).
@@ -13,24 +13,32 @@ export const APP_VERSION = "1.0.0";
  */
 export const WEBLLM_VERSION = "0.2.84";
 export const TRANSFORMERS_VERSION = "3.8.1";
-// Wersja onnxruntime-web używana przez Transformers.js 3.8.1 (do jawnych ścieżek WASM).
+// Pliki .wasm silnika onnxruntime (ort-wasm-simd-threaded.jsep.*).
+// Wersja 3.x Transformers.js domyślnie pobiera je z własnego dist/ —
+// przypinamy ten sam katalog (spójność wersji onnxruntime-web).
 export const ORT_WASM_CDN =
-  "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/";
+  `https://cdn.jsdelivr.net/npm/@huggingface/transformers@${TRANSFORMERS_VERSION}/dist/`;
 
 /**
  * Kolejność prób importu silników (odporność na awarię pojedynczego CDN).
  * Silniki są ładowane LENIWIE — dopiero gdy użytkownik wybierze model.
+ *
+ * UWAGA (weryfikowane w buildach):
+ * - WebLLM 0.2.84 `lib/index.js` jest w pełni samowystarczalnym modułem ESM
+ *   (bez bare-importów) → najpewniejszy pierwszy wybór.
+ * - `dist/transformers.web.js` w 3.x ma BARE IMPORTY onnxruntime-web/common
+ *   (NIE działa w przeglądarce!) → używamy URL-i serwisów ESM, które je
+ *   rozbijają na pełne adresy (+esm jsdelivr / esm.sh).
  */
 export const ENGINE_CDN = {
   webllm: [
+    `https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@${WEBLLM_VERSION}/lib/index.js`,
     `https://esm.sh/@mlc-ai/web-llm@${WEBLLM_VERSION}`,
     `https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@${WEBLLM_VERSION}/+esm`,
-    `https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@${WEBLLM_VERSION}/lib/index.js`,
   ],
   transformers: [
-    `https://cdn.jsdelivr.net/npm/@huggingface/transformers@${TRANSFORMERS_VERSION}/dist/transformers.web.js`,
-    `https://esm.sh/@huggingface/transformers@${TRANSFORMERS_VERSION}`,
     `https://cdn.jsdelivr.net/npm/@huggingface/transformers@${TRANSFORMERS_VERSION}/+esm`,
+    `https://esm.sh/@huggingface/transformers@${TRANSFORMERS_VERSION}`,
   ],
 };
 
@@ -60,13 +68,15 @@ export const TIERS = {
  */
 export const MODEL_CATALOG = [
   {
+    // Uwaga: 135M w WebLLM 0.2.84 występuje TYLKO jako q0f16/q0f32
+    // (wariantu q4f16_1 dla tego modelu nie ma w prebuiltAppConfig).
     key: "smol135", engine: "webllm",
-    modelId: "SmolLM2-135M-Instruct-q4f16_1-MLC",
+    modelId: "SmolLM2-135M-Instruct-q0f16-MLC",
     name: "SmolLM2 135M", family: "SmolLM2", params: "0,14 mld",
-    sizeMB: 100, vramMB: 280, ctx: 2048, pl: 2, tier: "ultra",
+    sizeMB: 60, vramMB: 360, ctx: 4096, pl: 2, tier: "ultra",
     needsF16: true, stable: true,
-    estDl: "~5–10 s",
-    blurb: "Błyskawiczny start! Tylko ~100 MB — pobiera się w kilka sekund, działa nawet na najsłabszym telefonie.",
+    estDl: "~3–8 s",
+    blurb: "Błyskawiczny start! Tylko ~60 MB — pobiera się w kilka sekund, działa nawet na najsłabszym telefonie.",
   },
   {
     key: "smol360", engine: "webllm",

@@ -101,8 +101,20 @@ async function boot() {
     onAbort: () => {
       S.proxy.abort();
       S.downloading = false;
+      // Odkolejkuj pytanie: usuń znacznik "⏳" i wróć tekst do pola
+      // wiadomości, żeby użytkownik mógł łatwo wysłać go ponownie.
+      if (S.queuedPrompt) {
+        const { text, placeholderNode } = S.queuedPrompt;
+        S.queuedPrompt = null;
+        if (placeholderNode?.parentNode) placeholderNode.remove();
+        const ta = $("#input");
+        if (ta) {
+          ta.value = text;
+          autogrow();
+        }
+      }
       setStatus("idle", "pobieranie anulowane");
-      toast("Pobieranie modelu zostało przerwane", "warn");
+      toast("Pobieranie przerwane — pytanie wróciło do pola, wyślij je ponownie", "warn", 5000);
     },
     onUsePrompt: (promptText) => {
       const ta = $("#input");
@@ -400,11 +412,13 @@ function scrollBottom(smooth) {
 }
 
 function msgNode(role, innerHTML, statsText = "") {
+  // Uwaga: CSS styluje bąble asystenta pod klasą .msg.ai (nie .msg.assistant)
+  const cls = role === "assistant" ? "ai" : role;
   const avatar = role === "user"
     ? `<div class="msg-avatar">Ty</div>`
     : `<div class="msg-avatar"><img src="./icons/icon-192.png" alt="AI"></div>`;
   const node = el(
-    `<div class="msg ${role}">${avatar}<div class="bubble"><div class="content"></div>
+    `<div class="msg ${cls}">${avatar}<div class="bubble"><div class="content"></div>
       <div class="msg-foot">
         <button class="icon-btn" data-act="copy" title="Kopiuj"><svg><use href="#i-copy"/></svg></button>
         ${role === "assistant" ? `<button class="icon-btn" data-act="regen" title="Generuj ponownie"><svg><use href="#i-refresh"/></svg></button>` : ""}
@@ -472,6 +486,10 @@ function onMessagesClick(e) {
 // ── Wysyłanie / generowanie ───────────────────────────────────
 async function queuePrompt(text) {
   if (!text || S.generating) return;
+  if (!S.model) {
+    toast("Najpierw wybierz model AI", "warn");
+    return;
+  }
   const ta = $("#input");
   if (ta) {
     ta.value = "";
@@ -539,9 +557,16 @@ async function onSend() {
   const text = ta.value.trim();
   if (!text || S.generating) return;
 
+  // Trwa pobieranie:
+  //  - silnik jeszcze nie gotowy → kolejka (odpowiedź po załadowaniu),
+  //  - pobieramy INNY model niż aktywny → kolejka (odpowieź nowym modelem),
+  //  - ten sam model już działa w pamięci → odpowiadamy od razu.
   if (S.downloading) {
-    await queuePrompt(text);
-    return;
+    const sameModelActive = S.engineLoaded && S.model && S.engineModelKey === S.model.key;
+    if (!sameModelActive) {
+      await queuePrompt(text);
+      return;
+    }
   }
 
   if (!(await ensureEngine())) return;
@@ -699,16 +724,19 @@ async function regenerate() {
 
 function friendlyError(e) {
   const m = String(e?.message || e || "");
-  if (/memory|OOM|out of memory|allocation/i.test(m)) {
+  if (/memory|OOM|out of memory|allocation|device lost/i.test(m)) {
     return "Za mało pamięci — zamknij inne karty i wybierz mniejszy model (np. SmolLM2 360M lub Qwen 0.5B).";
   }
-  if (/webgpu|adapter|device lost/i.test(m)) {
+  if (/webgpu|adapter/i.test(m)) {
     return "Problem z WebGPU — odśwież stronę lub wybierz tryb zgodności (WASM).";
   }
-  if (/network|fetch|Failed to fetch|Load failed/i.test(m)) {
-    return "Problem z siecią — model nie mógł się pobrać. Sprawdź połączenie i spróbuj ponownie.";
+  if (/network|fetch|Failed to fetch|Load failed|resolve module|CORS|networkerror/i.test(m)) {
+    return "Problem z siecią — nie udało się pobrać modelu lub biblioteki silnika. Sprawdź połączenie (albo rozszerzenia blokujące) i spróbuj ponownie.";
   }
   if (/MODEL_NOT_FOUND|nie występuje/i.test(m)) return m;
+  if (/silnik (webllm|wasm) nie jest załadowany/i.test(m)) {
+    return "Silnik utracił model (np. po awarii karty graficznej) — otwórz listę i wybierz model ponownie.";
+  }
   if (/context|Conversation exceeded/i.test(m)) {
     return "Przekroczono okno kontekstu — zacznij nową rozmowę lub wyczyść historię.";
   }
@@ -747,6 +775,14 @@ async function ensureEngine() {
 async function loadModel(key, { auto = false } = {}) {
   const model = getModel(key);
   if (!model) throw new Error("Nieznany model.");
+  if (S.engineLoaded && S.engineModelKey === key) {
+    // Model już siedzi w pamięci — zero pracy, zero ponownego pobierania.
+    S.model = model;
+    updateModelChip();
+    if (!S.settings.onboarded) S.settings = saveSettings({ onboarded: true });
+    setStatus("ready", model.name + (navigator.onLine ? "" : " · offline"));
+    return;
+  }
   if (S.downloading) {
     toast("Trwa już ładowanie modelu…", "info");
     downloadHub?.expand();
@@ -882,7 +918,9 @@ function catalogHTML(catalog, { showTiers = true } = {}) {
 }
 
 function hwCardHTML() {
-  if (!S.hw) return `<div class="hw-card">⏳ Badanie sprzętu…</div>`;
+  if (!S.hw) {
+    return `<div class="hw-card">⏳ Badanie sprzętu trwało za długo — wybierz model ręcznie (dostępne też warianty WASM na dole listy).</div>`;
+  }
   const warns = (S.rec?.warnings || [])
     .map((w) => `<div class="warnline ${w.icon === "info" ? "info" : ""}"><svg><use href="#${w.icon === "info" ? "i-info" : "i-warn"}"/></svg><span>${escapeHtml(w.text)}</span></div>`)
     .join("");
