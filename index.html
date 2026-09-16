@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>OffChat — prywatny czat AI w przeglądarce</title>
+  <meta name="description" content="OffChat — lekki czat z lokalnym modelem AI. 100% w przeglądarce, bez serwerów, z pamięcią podręczną offline. Działa nawet na słabych telefonach.">
+  <meta name="theme-color" content="#7c3aed">
+  <meta name="color-scheme" content="dark light">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="./css/style.css">
+</head>
+<body data-theme="auto">
+  <!-- Tło: animowana zorza (wyłączane w ustawieniach / przy reduced-motion) -->
+  <div class="aurora" aria-hidden="true">
+    <span class="blob b1"></span>
+    <span class="blob b2"></span>
+    <span class="blob b3"></span>
+    <span class="grain"></span>
+  </div>
+
+  <!-- Ikony SVG (sprite) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5c-1.5 0-2.9-.4-4.1-1L3 20l1-5.4A8.5 8.5 0 1 1 21 11.5z"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h0a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+      <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+      <symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></symbol>
+      <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+      <symbol id="i-spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></symbol>
+      <symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
+      <symbol id="i-wifioff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 2 20 20M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 3.9-2.3M12 20h.01M1 8.6A15 15 0 0 1 6.7 5.6M23.7 8.6a15 15 0 0 0-8.4-4.7"/></symbol>
+      <symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></symbol>
+      <symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 3h6l1 7 3 3H5l3-3 1-7z"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+      <symbol id="i-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7V8zM3.3 7 12 12l8.7-5M12 22V12"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="app">
+    <!-- Pasek górny -->
+    <header class="topbar glass">
+      <button class="icon-btn only-mobile" id="btn-threads" aria-label="Rozmowy">
+        <svg><use href="#i-menu"/></svg>
+      </button>
+      <div class="brand">
+        <img src="./icons/icon-192.png" alt="OffChat" width="36" height="36" class="logo">
+        <div class="brand-t">
+          <span class="brand-name">OffChat</span>
+          <span class="brand-tag">100% lokalnie · offline</span>
+        </div>
+      </div>
+      <div class="pill" id="status-pill" data-state="idle" role="status">
+        <span class="dot"></span>
+        <span class="pill-t"><strong id="status-text">Start…</strong><small id="status-sub"></small></span>
+      </div>
+      <div class="top-actions">
+        <button class="model-chip glass" id="btn-model" title="Wybierz model AI">
+          <svg><use href="#i-cpu"/></svg>
+          <span id="model-chip-name">Wybierz model</span>
+          <svg class="chev"><use href="#i-chev"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-install" title="Zainstaluj aplikację" hidden>
+          <svg><use href="#i-download"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-settings" title="Ustawienia" aria-label="Ustawienia">
+          <svg><use href="#i-gear"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="offline-banner" id="offline-banner" hidden>
+      <svg><use href="#i-wifioff"/></svg>
+      <span>Jesteś offline — działa model zapisany w pamięci podręcznej.</span>
+    </div>
+
+    <div class="layout">
+      <!-- Panel rozmów -->
+      <aside class="drawer glass" id="drawer" aria-label="Rozmowy">
+        <div class="drawer-head">
+          <h2>Rozmowy</h2>
+          <div class="row gap">
+            <button class="btn primary sm" id="btn-new-chat"><svg><use href="#i-plus"/></svg>Nowa</button>
+            <button class="icon-btn only-mobile" id="btn-close-drawer" aria-label="Zamknij"><svg><use href="#i-x"/></svg></button>
+          </div>
+        </div>
+        <label class="search">
+          <svg><use href="#i-search"/></svg>
+          <input type="search" id="thread-search" placeholder="Szukaj rozmowy…" autocomplete="off">
+        </label>
+        <nav class="thread-list" id="thread-list" aria-label="Lista rozmów"></nav>
+        <div class="drawer-foot">
+          <div class="storage" id="storage-box" title="Zużycie pamięci przeglądarki">
+            <div class="bar"><i id="storage-bar"></i></div>
+            <small id="storage-text">Pamięć: …</small>
+          </div>
+          <div class="row gap">
+            <button class="btn ghost sm grow" id="btn-export"><svg><use href="#i-upload"/></svg>Eksport</button>
+            <button class="btn ghost sm grow" id="btn-import"><svg><use href="#i-download"/></svg>Import</button>
+            <input type="file" id="import-file" accept="application/json,.json" hidden>
+          </div>
+        </div>
+      </aside>
+      <div class="scrim" id="scrim" hidden></div>
+
+      <!-- Czat -->
+      <main class="chat">
+        <section class="welcome" id="welcome">
+          <div class="hero glass">
+            <img src="./icons/icon-192.png" alt="" width="72" height="72" class="hero-logo">
+            <h1>Cześć! Jestem <span class="grad">OffChat</span> 👋</h1>
+            <p class="muted">Prywatny asystent AI, który mieszka <strong>w Twojej przeglądarce</strong>.
+              Zero serwerów, zero wysyłania danych — model działa lokalnie na Twoim urządzeniu.</p>
+            <div class="hero-badges">
+              <span class="badge"><svg><use href="#i-shield"/></svg>Pełna prywatność</span>
+              <span class="badge"><svg><use href="#i-wifioff"/></svg>Praca offline</span>
+              <span class="badge"><svg><use href="#i-bolt"/></svg>WebGPU + WASM</span>
+            </div>
+            <button class="btn primary lg" id="model-cta"><svg><use href="#i-spark"/></svg>Wybierz model i zacznij</button>
+            <p class="hint" id="hw-hint">Sprawdzanie możliwości urządzenia…</p>
+          </div>
+          <div class="suggestions" id="suggestions" aria-label="Propozycje pytań"></div>
+        </section>
+
+        <div class="load-more-wrap" id="load-more-wrap" hidden>
+          <button class="btn ghost sm" id="btn-load-more">Wczytaj starsze wiadomości</button>
+        </div>
+        <section class="messages" id="messages" aria-live="polite" aria-label="Wiadomości"></section>
+
+        <button class="fab glass" id="scroll-fab" aria-label="Przewiń na dół" hidden>
+          <svg><use href="#i-down"/></svg>
+        </button>
+
+        <!-- Kompozytor -->
+        <footer class="composer">
+          <div class="progress-line" id="progress-line" hidden><i></i></div>
+          <div class="composer-box glass">
+            <textarea id="input" rows="1" maxlength="4000"
+              placeholder="Napisz wiadomość… (Enter = wyślij)" aria-label="Wiadomość"></textarea>
+            <button class="icon-btn danger" id="btn-stop" title="Zatrzymaj generowanie" aria-label="Zatrzymaj" hidden>
+              <svg><use href="#i-stop"/></svg>
+            </button>
+            <button class="send-btn" id="btn-send" title="Wyślij" aria-label="Wyślij">
+              <svg><use href="#i-send"/></svg>
+            </button>
+          </div>
+          <div class="composer-meta">
+            <small id="ctx-info" title="Szacowane zużycie okna kontekstu"></small>
+            <small id="gen-stats"></small>
+          </div>
+        </footer>
+      </main>
+    </div>
+  </div>
+
+  <!-- Nakładka pobierania modelu -->
+  <div class="dl-overlay" id="download-overlay" hidden>
+    <div class="dl-card glass">
+      <img src="./icons/icon-192.png" alt="" width="56" height="56" class="dl-logo">
+      <h3 id="dl-title">Pobieranie modelu…</h3>
+      <div class="dl-bar"><i id="dl-bar"></i></div>
+      <div class="dl-row"><strong id="dl-pct">0%</strong><span id="dl-text" class="muted">Łączenie…</span></div>
+      <p class="hint" id="dl-sub">Pierwsze pobranie waży setki MB — kolejne uruchomienia będą natychmiastowe i offline.</p>
+      <button class="btn ghost" id="btn-dl-hide">Ukryj (pobieranie trwa w tle)</button>
+    </div>
+  </div>
+
+  <noscript>
+    <div style="padding:2rem;text-align:center;font-family:sans-serif">
+      OffChat wymaga włączonego JavaScriptu — cała magia dzieje się lokalnie w przeglądarce.
+    </div>
+  </noscript>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
