@@ -125,8 +125,10 @@ self.addEventListener("fetch", (event) => {
             const body = await fresh.clone().arrayBuffer();
             const headers = new Headers(fresh.headers);
             headers.set("x-offchat-ts", String(Date.now()));
+            // Store under a plain request: the caller's `no-store` mode must
+            // not leak into what we keep on disk.
             cache
-              .put(req, new Response(body, { status: fresh.status, statusText: fresh.statusText, headers }))
+              .put(new Request(req.url), new Response(body, { status: fresh.status, statusText: fresh.statusText, headers }))
               .then(() => trimCache(HFAPI_CACHE, 80))
               .catch(() => {});
             return fresh;
