@@ -52,7 +52,7 @@ export class EngineProxy {
   _breakWorker() {
     this.workerBroken = true;
     this._stopWatchdog();
-    try { this.worker?.terminate(); } catch { /* ignoruj */ }
+    try { this.worker?.terminate(); } catch { /* ignore */ }
     this.worker = null;
     for (const [, p] of this.pending) {
       p.reject(new Error("AI engine worker is unavailable."));
@@ -184,14 +184,14 @@ export class EngineProxy {
 
   async abort() {
     if (this.mode === "worker" && this.worker && !this.workerBroken) {
-      try { await this._workerCall("abort", {}, { timeoutMs: 3000 }); } catch { /* ignoruj */ }
+      try { await this._workerCall("abort", {}, { timeoutMs: 3000 }); } catch { /* ignore */ }
     }
     this.direct?.abort();
   }
 
   async unload() {
     if (this.mode === "worker" && this.worker && !this.workerBroken) {
-      try { await this._workerCall("unload", {}, { timeoutMs: 10000 }); } catch { /* ignoruj */ }
+      try { await this._workerCall("unload", {}, { timeoutMs: 10000 }); } catch { /* ignore */ }
     }
     await this.direct?.unload?.().catch(() => {});
   }
@@ -201,7 +201,7 @@ export class EngineProxy {
     if (this.mode === "worker" && this.worker && !this.workerBroken) {
       try {
         return await this._workerCall("state", {}, { timeoutMs: 5000 });
-      } catch { /* spadnij do direct */ }
+      } catch { /* fall through to direct */ }
     }
     return this.direct?.state?.() || { kind: null, modelId: null, loaded: false };
   }

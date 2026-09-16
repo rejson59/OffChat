@@ -248,6 +248,7 @@ async function boot() {
     }, 8200);
   }
 
+  handleLaunchParams();
   registerSW();
   refreshStorageBar().catch(() => {});
 }
@@ -258,6 +259,7 @@ function bindUI() {
   const input = $("#input");
   input.addEventListener("input", () => {
     autogrow();
+    updateCharCount();
     // Glow the send button while there is something to send.
     $("#btn-send").classList.toggle("ready", input.value.trim().length > 0);
   });
@@ -293,6 +295,7 @@ function bindUI() {
   $("#btn-import").addEventListener("click", () => $("#import-file").click());
   $("#import-file").addEventListener("change", onImportFile);
 
+  $("#btn-export-thread").addEventListener("click", exportThreadMD);
   $("#btn-settings").addEventListener("click", openSettings);
   $("#btn-safe-off").addEventListener("click", () => {
     S.settings = saveSettings({ safeMode: "off" });
@@ -325,6 +328,25 @@ function bindUI() {
     }
   });
 
+  // Surface fatal errors gently (chats are already persisted).
+  let lastErrToast = 0;
+  const reportGlitch = (err) => {
+    console.error("[OffChat]", err);
+    const now = Date.now();
+    if (now - lastErrToast < 15000) return;
+    lastErrToast = now;
+    toast("Something glitched — your chats are safe. Reload if it repeats.", "error", 5000);
+  };
+  window.addEventListener("error", (e) => reportGlitch(e.error || e.message));
+  window.addEventListener("unhandledrejection", (e) => reportGlitch(e.reason));
+
+  // The OS drops the wake lock when hidden — take it back on return.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && (S.downloading || S.generating)) {
+      holdWakeLock(true);
+    }
+  });
+
   const pill = $("#status-pill");
   pill.style.cursor = "pointer";
   pill.setAttribute("title", "Click to manage the model or the download progress");
@@ -341,6 +363,7 @@ function autogrow() {
   const ta = $("#input");
   ta.style.height = "auto";
   ta.style.height = Math.min(ta.scrollHeight, 150) + "px";
+  updateCharCount();
 }
 
 function updateOnlineUI() {
@@ -472,7 +495,19 @@ function scrollBottom(smooth) {
   });
 }
 
-function msgNode(role, innerHTML, statsText = "") {
+/** Short clock time for message footers ("14:32", "Mon 14:32", or a date). */
+function fmtTime(ts) {
+  const d = new Date(ts);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  if (d.toDateString() === new Date().toDateString()) return `${hh}:${mm}`;
+  if (Date.now() - d.getTime() < 7 * 86400000) {
+    return `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()]} ${hh}:${mm}`;
+  }
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function msgNode(role, innerHTML, statsText = "", meta = {}) {
   // Note: CSS styles assistant bubbles under .msg.ai (not .msg.assistant)
   const cls = role === "assistant" ? "ai" : role;
   const avatar = role === "user"
@@ -483,6 +518,8 @@ function msgNode(role, innerHTML, statsText = "") {
       <div class="msg-foot">
         <button class="icon-btn" data-act="copy" title="Copy"><svg><use href="#i-copy"/></svg></button>
         ${role === "assistant" ? `<button class="icon-btn" data-act="regen" title="Regenerate"><svg><use href="#i-refresh"/></svg></button>` : ""}
+        ${role === "assistant" && meta.cutOff ? `<button class="icon-btn accent" data-act="continue" title="Continue this answer"><svg><use href="#i-play"/></svg></button>` : ""}
+        ${meta.ts ? `<time class="msg-time" title="${escapeHtml(new Date(meta.ts).toLocaleString())}">${escapeHtml(fmtTime(meta.ts))}</time>` : ""}
         <small>${escapeHtml(statsText)}</small>
       </div></div></div>`
   );
@@ -516,7 +553,7 @@ async function renderThread(resetWindow) {
     const html = m.role === "user"
       ? escapeHtml(m.content).replace(/\n/g, "<br>")
       : renderMarkdown(m.content);
-    const node = msgNode(m.role, html, statsLine(m.stats));
+    const node = msgNode(m.role, html, statsLine(m.stats), { ts: m.ts, cutOff: !!m.stats?.cutOff });
     node.dataset.mid = m.id;
     node.dataset.raw = m.content;
     box.appendChild(node);
@@ -547,6 +584,8 @@ function onMessagesClick(e) {
     copyText(raw).then((ok) => toast(ok ? "Copied" : "Could not copy", ok ? "ok" : "error"));
   } else if (btn.dataset.act === "regen") {
     regenerate();
+  } else if (btn.dataset.act === "continue") {
+    continueReply(msgEl?.dataset.mid);
   }
 }
 
@@ -584,7 +623,7 @@ async function queuePrompt(text) {
 
   const userMsg = await Messages.add(S.activeId, { role: "user", content: text });
   const box = $("#messages");
-  const uNode = msgNode("user", escapeHtml(text).replace(/\n/g, "<br>"));
+  const uNode = msgNode("user", escapeHtml(text).replace(/\n/g, "<br>"), "", { ts: userMsg.ts });
   uNode.dataset.mid = userMsg.id;
   uNode.dataset.raw = text;
   box.appendChild(uNode);
@@ -661,7 +700,7 @@ async function onSend() {
 
   const userMsg = await Messages.add(S.activeId, { role: "user", content: text });
   const box = $("#messages");
-  const uNode = msgNode("user", escapeHtml(text).replace(/\n/g, "<br>"));
+  const uNode = msgNode("user", escapeHtml(text).replace(/\n/g, "<br>"), "", { ts: userMsg.ts });
   uNode.dataset.mid = userMsg.id;
   uNode.dataset.raw = text;
   box.appendChild(uNode);
@@ -687,20 +726,26 @@ function historyForChat(allMessages, ctxTokens) {
   return [sys, ...picked];
 }
 
-async function generateReply() {
+async function generateReply(opts = {}) {
   const box = $("#messages");
+  const cont = opts.continuationOf || null; // { mid, baseText, node } — append into an existing bubble
   S.generating = true;
-  S.streamText = "";
+  S.streamText = cont?.baseText || "";
   $("#btn-send").disabled = true;
   $("#btn-stop").hidden = false;
   $("#progress-line").hidden = false;
   // Pause background animation while the GPU is busy with inference.
   document.body.classList.add("generating");
+  holdWakeLock(true);
 
-  // Streaming bubble
-  const node = msgNode("assistant", `<span class="typing"><i></i><i></i><i></i></span>`, "");
+  // Streaming bubble (fresh, or the existing one when continuing)
+  let node = cont?.node || null;
+  if (!node || !node.isConnected) {
+    node = msgNode("assistant", `<span class="typing"><i></i><i></i><i></i></span>`, "");
+    box.appendChild(node);
+  }
   const content = node.querySelector(".content");
-  box.appendChild(node);
+  node.querySelector('[data-act="continue"]')?.remove();
   scrollBottom(true);
 
   let renderedAt = 0;
@@ -714,10 +759,16 @@ async function generateReply() {
     if (S.nearBottom) box.scrollTop = box.scrollHeight;
   };
 
+  paint(true); // with continuation, show the base text immediately
+
   try {
     const all = await Messages.list(S.activeId, 1000);
     const ctx = S.model.ctx || 4096;
     const history = historyForChat(all, ctx);
+    if (cont) {
+      // Invisible nudge — sent, but never saved, so the history stays clean.
+      history.push({ role: "user", content: "Continue from exactly where you stopped. Do not repeat what you already wrote." });
+    }
     updateCtxInfo(all);
     setStatus("generating", S.model.name);
 
@@ -735,23 +786,41 @@ async function generateReply() {
         paint(false);
       },
     });
-    S.streamText = res.text || S.streamText;
+    S.streamText = cont
+      ? cont.baseText + (res.text || S.streamText.slice(cont.baseText.length))
+      : (res.text || S.streamText);
     paint(true);
 
+    // Cut off at the token limit? (exact signal on WebLLM, estimate on WASM)
+    const legTokens = res.completionTokens || Math.ceil((res.text || "").length / 4);
+    const cutOff = !res.aborted && (res.finishReason === "length" || legTokens >= S.settings.maxTokens - 1);
     const stats = {
       tokPerSec: res.tokPerSec || null,
-      completionTokens: res.completionTokens || Math.ceil(S.streamText.length / 4),
+      completionTokens: cont ? Math.ceil(S.streamText.length / 4) : legTokens,
       ttftMs: res.ttftMs || null,
+      cutOff,
     };
-    const saved = await Messages.add(S.activeId, {
-      role: "assistant", content: S.streamText, stats,
-    });
-    node.dataset.mid = saved.id;
-    node.dataset.raw = S.streamText;
-    node.querySelector(".msg-foot small").textContent = statsLine(stats);
+    let mid;
+    if (cont) {
+      await Messages.update(cont.mid, { content: S.streamText, stats });
+      mid = cont.mid;
+    } else {
+      const saved = await Messages.add(S.activeId, {
+        role: "assistant", content: S.streamText, stats,
+      });
+      mid = saved.id;
+    }
+    // Swap in a finished bubble: timestamp, stats, and a Continue button when cut off.
+    const finalNode = msgNode("assistant", content.innerHTML, statsLine(stats), { ts: Date.now(), cutOff });
+    finalNode.dataset.mid = mid;
+    finalNode.dataset.raw = S.streamText;
+    node.replaceWith(finalNode);
+    node = finalNode;
     $("#gen-stats").textContent = res.aborted
       ? `Stopped · ${statsLine(stats)}`
-      : `Done in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${statsLine(stats)}`;
+      : cutOff
+        ? `Cut off at the token limit — press Continue below`
+        : `Done in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${statsLine(stats)}`;
 
     const fresh = await Messages.list(S.activeId, 1000);
     updateCtxInfo(fresh);
@@ -771,6 +840,7 @@ async function generateReply() {
     }
   } finally {
     S.generating = false;
+    holdWakeLock(false);
     document.body.classList.remove("generating");
     $("#btn-send").disabled = false;
     $("#btn-stop").hidden = true;
@@ -795,6 +865,18 @@ async function regenerate() {
   }
   await renderThread(false);
   await generateReply();
+}
+
+async function continueReply(mid) {
+  if (S.generating || !S.activeId) return;
+  if (!(await ensureEngine())) return;
+  const node = mid && $("#messages").querySelector(`.msg[data-mid="${mid}"]`);
+  const baseText = node?.dataset.raw;
+  if (!node || !baseText) {
+    toast("Could not find that message — try Regenerate", "warn");
+    return;
+  }
+  await generateReply({ continuationOf: { mid, baseText, node } });
 }
 
 /** Did the GPU just crash (device lost / out of memory)? */
@@ -928,6 +1010,7 @@ async function loadModel(key, { auto = false } = {}) {
   }
 
   S.downloading = true;
+  holdWakeLock(true);
   S.model = model;
   S.settings = saveSettings({ modelKey: key });
   updateModelChip();
@@ -985,11 +1068,89 @@ async function loadModel(key, { auto = false } = {}) {
     throw e;
   } finally {
     S.downloading = false;
+    holdWakeLock(false);
     downloadHub?.finish();
   }
 }
 
 // ── Onboarding / model picker ─────────────────────────────────
+// ── Wake lock / composer / export / launch ──────────────────────
+let wakeLock = null;
+/** Keep the screen on during long downloads & generation (mobile). */
+async function holdWakeLock(on) {
+  try {
+    if (on && "wakeLock" in navigator && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    } else if (!on && wakeLock) {
+      await wakeLock.release().catch(() => {});
+      wakeLock = null;
+    }
+  } catch { /* unsupported or denied — stay silent */ }
+}
+
+function updateCharCount() {
+  const ta = $("#input");
+  const cc = $("#char-count");
+  if (!ta || !cc) return;
+  const n = ta.value.length;
+  const max = Number(ta.getAttribute("maxlength") || 4000);
+  cc.textContent = n ? `${n.toLocaleString("en-US")} / ${max.toLocaleString("en-US")}` : "";
+  cc.classList.toggle("warn", n > max * 0.9);
+}
+
+async function exportThreadMD() {
+  if (!S.activeId) {
+    toast("Open a chat first", "warn");
+    return;
+  }
+  const t = S.threads.find((x) => x.id === S.activeId);
+  const all = await Messages.list(S.activeId, 1000).catch(() => []);
+  if (!all.length) {
+    toast("Nothing to export yet", "warn");
+    return;
+  }
+  const modelName = t?.modelKey ? getModel(t.modelKey)?.name || t.modelKey : "—";
+  const lines = [
+    `# ${t?.title || "OffChat export"}`,
+    ``,
+    `*Exported ${new Date().toLocaleString()} · model: ${modelName}*`,
+    ``,
+  ];
+  for (const m of all) {
+    lines.push(m.role === "user" ? "## 🧑 You" : "## 🤖 OffChat", "", m.content, "");
+  }
+  const slug = (t?.title || "chat").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "chat";
+  downloadFile(`offchat-${slug}.md`, lines.join("\n"), "text/markdown");
+  toast("Chat exported as Markdown", "ok");
+}
+
+/** Launch URLs: app shortcuts (?new=1, ?pick=1) and shared content. */
+function handleLaunchParams() {
+  let q;
+  try {
+    q = new URLSearchParams(location.search);
+  } catch {
+    return;
+  }
+  if ([...q.keys()].length === 0) return;
+  if (q.get("new") === "1") newChat();
+  const shared = [q.get("title"), q.get("text"), q.get("url")].filter(Boolean).join("\n");
+  if (shared) {
+    newChat();
+    const ta = $("#input");
+    ta.value = shared.slice(0, 4000);
+    autogrow();
+    updateCharCount();
+    $("#btn-send").classList.add("ready");
+    toast("Shared content pasted — pick a model and press Send", "info", 5000);
+  }
+  if (q.get("pick") === "1") setTimeout(() => openModelPicker(), 800);
+  try {
+    history.replaceState(null, "", location.pathname);
+  } catch { /* ignore */ }
+}
+
 function starsHTML(n) {
   return "★".repeat(n) + "☆".repeat(5 - n);
 }

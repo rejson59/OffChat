@@ -190,12 +190,15 @@ export class Engine {
     });
 
     let usage = null;
+    let finishReason = null;
     for await (const chunk of stream) {
       if (this.aborted || myGen !== this.gen) {
         try { await this.wEngine.interruptGenerate(); } catch { /* ignore */ }
         break;
       }
       if (chunk?.usage) usage = chunk.usage;
+      const fr = chunk?.choices?.[0]?.finish_reason;
+      if (fr) finishReason = fr;
       const delta = chunk?.choices?.[0]?.delta?.content || "";
       if (delta) {
         if (first) { ttft = performance.now() - t0; first = false; }
@@ -211,6 +214,7 @@ export class Engine {
       aborted: this.aborted || myGen !== this.gen,
       promptTokens: usage?.prompt_tokens ?? null,
       completionTokens: outTokens,
+      finishReason,
       ttftMs: Math.round(ttft),
       tokPerSec: Math.round((outTokens / secs) * 10) / 10,
     };

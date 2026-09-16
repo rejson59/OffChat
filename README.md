@@ -22,6 +22,11 @@ A lightweight, static chat with a Small Language Model running 100% client-side.
 - 🚀 **Instant start & filters** — ultra-light models (< 150 MB), preconnects to CDN servers, size filters and persistent storage
 - 🎮 **Download hub & mini-game** — minimize the download into a floating dock, browse chats and history, play neon NeuroPong or read AI facts
 - ✍️ **Prompt queueing** — type your question while downloading; the answer generates automatically once loaded!
+- ▶️ **Continue on cut-off** — answers clipped by the token limit grow a Continue button that resumes in the same bubble
+- 🕒 **Timestamps & counters** — subtle message times, live token stats, and a composer character counter
+- 📝 **Markdown export** — save any chat as a clean `.md` file with one click
+- 📤 **Share target & shortcuts** — share text from any app straight into OffChat; long-press the icon for New chat / Choose model
+- 🔆 **Wake lock** — the screen stays on during long downloads and generation (mobile)
 
 ## 🗂️ File structure
 
@@ -155,7 +160,7 @@ SmolLM2 135M (~90 MB, 4–12 tok/s) · SmolLM2 360M (~230 MB, 2–7 tok/s) · Ti
 
 | Data | Store | Managed by |
 |---|---|---|
-| App-shell (HTML/CSS/JS/icons) | Cache API `offchat-shell-v4` | Service Worker |
+| App-shell (HTML/CSS/JS/icons) | Cache API `offchat-shell-v5` | Service Worker |
 | Engine libraries (esm.sh/jsDelivr) | Cache API `offchat-cdn-v1` | Service Worker |
 | WebLLM model weights | Cache API (`webllm/…`) or OPFS | WebLLM (`cacheBackend` in settings) |
 | ONNX model weights | Cache API (`transformers-cache`) | Transformers.js |
@@ -186,7 +191,8 @@ Everything happens locally. The only network traffic is: downloading app files, 
 
 - The code is vanilla JS (ES2022, modules) — no bundler, no `npm install`.
 - New WebLLM model? Add an entry to `MODEL_CATALOG` in `js/config.js` (the id must exist in that WebLLM version's `prebuiltAppConfig`), including a `tps: [min, max]` estimate.
-- Syntax test: `node --check js/*.js` — or serve with `python3 -m http.server` and click around.
+- Quality gate: `node tests/check.mjs` — syntax, catalog integrity, Polish-text sweep, id wiring, module smoke test.
+- Or serve with `python3 -m http.server` and click around.
 
 ## 📄 License
 

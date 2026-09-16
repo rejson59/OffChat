@@ -316,6 +316,24 @@ export const Messages = {
     return msg;
   },
 
+  async update(id, patch) {
+    return guard(
+      async () => {
+        const cur = await tx("messages", "readonly", (st) => st.get(id));
+        if (!cur) return null;
+        const next = { ...cur, ...patch };
+        await tx("messages", "readwrite", (st) => st.put(next));
+        return next;
+      },
+      async () => {
+        const m = memFallback.messages.find((m) => m.id === id);
+        if (!m) return null;
+        Object.assign(m, patch);
+        return m;
+      }
+    );
+  },
+
   async removeLastAssistant(threadId) {
     const list = await Messages.list(threadId, 5);
     for (let i = list.length - 1; i >= 0; i--) {

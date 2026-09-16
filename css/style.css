@@ -363,6 +363,11 @@ body.no-avatars .msg-avatar { display: none; }
 .msg-foot .icon-btn { width: 28px; height: 28px; border-radius: 9px; }
 .msg-foot .icon-btn svg { width: 14px; height: 14px; }
 .msg-foot small { font-size: 0.68rem; color: var(--ink-faint); margin-left: auto; }
+.msg-time { font-size: 0.68rem; color: var(--ink-faint); white-space: nowrap; }
+.msg.user .msg-time { color: rgba(255, 255, 255, 0.75); }
+.icon-btn.accent { color: var(--fuchsia); border-color: color-mix(in srgb, var(--fuchsia) 45%, transparent); }
+.icon-btn.accent:hover { background: color-mix(in srgb, var(--fuchsia) 16%, transparent); }
+#char-count.warn { color: #f87171; font-weight: 700; }
 .msg.user .msg-foot small { color: rgba(255, 255, 255, 0.75); }
 .msg.user .msg-foot .icon-btn { color: rgba(255, 255, 255, 0.85); }
 

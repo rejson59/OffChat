@@ -4,7 +4,7 @@
 // (WebLLM / Transformers.js) keep them in their own Cache API stores.
 // Double-caching would waste hundreds of MB on weak phones.
 // ─────────────────────────────────────────────────────────────
-const APP_CACHE = "offchat-shell-v4";
+const APP_CACHE = "offchat-shell-v5";
 const CDN_CACHE = "offchat-cdn-v1";
 
 const SHELL = [
@@ -81,7 +81,7 @@ async function trimCache(name, maxEntries) {
     if (keys.length > maxEntries) {
       await Promise.all(keys.slice(0, keys.length - maxEntries).map((k) => cache.delete(k)));
     }
-  } catch { /* ignoruj */ }
+  } catch { /* ignore */ }
 }
 
 self.addEventListener("fetch", (event) => {
