@@ -12,6 +12,8 @@
 //    postMessage round trips (a real cost on budget phones).
 // ─────────────────────────────────────────────────────────────
 
+import { classifyError } from "./model-check.js";
+
 let engine = null;
 let enginePromise = null;
 
@@ -132,8 +134,13 @@ onmessage = async (e) => {
     }
   } catch (err) {
     flushAllTokens();
+    const info = err?.code ? null : classifyError(err);
     post(reqId, "error", {
       message: String(err?.message || err || "Unknown engine error"),
+      // Machine-readable diagnosis (401 vs 404 vs offline vs GPU…).
+      code: err?.code || info?.code || null,
+      status: err?.status ?? info?.status ?? null,
+      url: err?.url || info?.url || null,
     });
   }
 };

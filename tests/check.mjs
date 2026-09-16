@@ -3,7 +3,8 @@
 // Checks: JS syntax · model catalog integrity · no Polish text ·
 //         HTML/JS id wiring · module evaluation smoke test ·
 //         streaming-renderer equivalence · crash-guard helpers ·
-//         service-worker shell completeness.
+//         service-worker shell completeness · model preflight (Hub 401) ·
+//         error classification · potato profile.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -60,7 +61,7 @@ const fail = (name, detail) => {
 };
 
 // ── 1. Syntax ────────────────────────────────────────────────
-console.log("1/8 syntax (node --check)");
+console.log("1/11 syntax (node --check)");
 try {
   for (const f of JS_FILES) {
     execFileSync(process.execPath, ["--check", f], { cwd: root, stdio: "pipe" });
@@ -71,7 +72,7 @@ try {
 }
 
 // ── 2. Catalog integrity ─────────────────────────────────────
-console.log("2/8 model catalog");
+console.log("2/11 model catalog");
 try {
   const c = await import("../js/config.js");
   const errs = [];
@@ -96,7 +97,7 @@ try {
 }
 
 // ── 3. No Polish text ────────────────────────────────────────
-console.log("3/8 Polish-text sweep");
+console.log("3/11 Polish-text sweep");
 {
   const diacritics = /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/;
   // Distinctive ASCII-only Polish words (backstop for lone words like "ignoruj").
@@ -139,7 +140,7 @@ console.log("3/8 Polish-text sweep");
 }
 
 // ── 4. ID wiring (HTML ↔ JS) ────────────────────────────────
-console.log("4/8 element-id wiring");
+console.log("4/11 element-id wiring");
 {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
   const js = JS_FILES.filter((f) => f.startsWith("js/"))
@@ -158,7 +159,7 @@ console.log("4/8 element-id wiring");
 }
 
 // ── 5. Module evaluation smoke test ──────────────────────────
-console.log("5/8 module evaluation");
+console.log("5/11 module evaluation");
 try {
   Object.defineProperty(globalThis, "localStorage", {
     value: {
@@ -196,7 +197,7 @@ try {
   globalThis.history = { replaceState() {} };
   globalThis.matchMedia = () => ({ matches: false, addEventListener() {} });
   globalThis.requestAnimationFrame = () => 0;
-  for (const m of ["config", "hardware", "storage", "markdown", "ui", "engine", "engine-proxy", "stream-render", "resilience", "download-hub", "app"]) {
+  for (const m of ["config", "model-check", "hardware", "storage", "markdown", "ui", "engine", "engine-proxy", "stream-render", "resilience", "download-hub", "app"]) {
     await import(`../js/${m}.js`);
   }
   ok("all app modules evaluate without errors");
@@ -208,7 +209,7 @@ try {
 // The incremental renderer must produce exactly the same HTML as the
 // one-shot renderer (otherwise answers would look different while
 // streaming than they do after a reload).
-console.log("6/8 streaming renderer");
+console.log("6/11 streaming renderer");
 try {
   const { findStableCut } = await import("../js/stream-render.js");
   const { renderMarkdown } = await import("../js/markdown.js");
@@ -308,7 +309,7 @@ try {
 }
 
 // ── 7. Crash-guard helpers ───────────────────────────────────
-console.log("7/8 crash guard");
+console.log("7/11 crash guard");
 try {
   for (const k of Object.keys(memStore)) delete memStore[k];
   const { Draft, BusyMark, closedPartialStats, isInterruptedMessage } =
@@ -336,13 +337,169 @@ try {
 // ── 8. Service-worker shell completeness ─────────────────────
 // Every shipped JS module must be precached, otherwise the offline
 // experience breaks the first time one of them is added.
-console.log("8/8 service-worker shell");
+console.log("8/11 service-worker shell");
 {
   const sw = fs.readFileSync(path.join(root, "sw.js"), "utf8");
   const missing = JS_FILES.filter((f) => f.startsWith("js/"))
     .filter((f) => !sw.includes(`./${f}`));
   if (missing.length) fail("sw shell", "not precached: " + missing.join(", "));
   else ok("all js modules precached by sw.js");
+}
+
+// ── 9. Model preflight (the "Unauthorized access to file" bug) ──
+// Hugging Face answers 401 for a repository that does not exist, so the
+// preflight must (a) detect it, (b) repair renamed repos, (c) pick a
+// variant that really exists — all BEFORE downloading a single byte.
+console.log("9/11 model preflight");
+try {
+  for (const k of Object.keys(memStore)) delete memStore[k];
+  const mc = await import("../js/model-check.js");
+  const MOD = {
+    engine: "transformers",
+    modelId: "onnx-community/TinyLlama-1.1B-Chat-v1.0",
+    dtypes: ["q8", "q4", "q4f16"],
+  };
+  const tree = (files) => ({ ok: true, status: 200, json: async () => files });
+  const err401 = { ok: false, status: 401, json: async () => ({ error: "Invalid username or password." }) };
+  const file = (path, size) => ({ type: "file", path, size });
+
+  // A) healthy repo → the first dtype that exists wins (q8 before q4)
+  const healthy = {
+    "onnx/model_q4.onnx": 100,
+    "onnx/model_quantized.onnx": 60,
+    "onnx/model_q4f16.onnx": 40,
+  };
+  let r = await mc.probeWasmModel(MOD, {
+    fetchImpl: async () => tree(Object.entries(healthy).map(([f, n]) => file(f, n))),
+    force: true,
+  });
+  if (!r.ok) throw new Error("healthy repo rejected");
+  if (r.dtype !== "q8") throw new Error("expected q8 preference, got " + r.dtype);
+  if (r.bytes !== 60) throw new Error("expected the q8 file size, got " + r.bytes);
+
+  // B) renamed repo: declared id 401s, the -ONNX twin works
+  const calls = [];
+  const repaired = await mc.probeWasmModel(MOD, {
+    force: true,
+    fetchImpl: async (url) => {
+      calls.push(url);
+      if (url.includes("TinyLlama-1.1B-Chat-v1.0-ONNX")) {
+        return tree([file("onnx/model_q4.onnx", 910), file("onnx/model_q8.onnx", 1)]);
+      }
+      return err401;
+    },
+  });
+  // the twin only publishes _q4 → the preflight must downgrade to it
+  if (!repaired.ok || !repaired.repaired) throw new Error("rename not repaired: " + JSON.stringify(repaired));
+  if (repaired.dtype !== "q4") throw new Error("expected q4 fallback, got " + repaired.dtype);
+  if (!calls.some((u) => u.includes("-ONNX"))) throw new Error("never tried the canonical name");
+
+  // C) repo really gone (401 everywhere) → precise code, not a raw string
+  for (const k of Object.keys(memStore)) delete memStore[k];
+  const gone = await mc.probeWasmModel(
+    { engine: "transformers", modelId: "onnx-community/Does-Not-Exist", dtypes: ["q4"] },
+    { force: true, fetchImpl: async () => err401 }
+  );
+  if (gone.ok || gone.code !== "unauthorized") throw new Error("401 not classified: " + JSON.stringify(gone));
+
+  // D) repo fine but no usable variant → reported, never a crash
+  for (const k of Object.keys(memStore)) delete memStore[k];
+  const noVariant = await mc.probeWasmModel(
+    { engine: "transformers", modelId: "onnx-community/No-Variant", dtypes: ["q4"] },
+    { force: true, fetchImpl: async () => tree([file("onnx/model_fp16.onnx", 10)]) }
+  );
+  if (noVariant.ok) throw new Error("missing variant accepted");
+
+  // E) the Hub becomes unreachable → cached answer keeps the app working
+  const again = await mc.probeWasmModel(
+    { engine: "transformers", modelId: "onnx-community/No-Variant", dtypes: ["q4"] },
+    { fetchImpl: async () => { throw new Error("offline"); } }
+  );
+  if (again.ok || !again.cached) throw new Error("cache not used offline");
+
+  // F) external-data shards are counted (gemma-3 / Llama-3.2 layout)
+  const ext = mc.pickDtype(
+    ["q4"],
+    ["onnx/model_q4.onnx", "onnx/model_q4.onnx_data", "onnx/model_q4.onnx_data_1"]
+  );
+  if (!ext || ext.data.length !== 2) throw new Error("external data shards not detected");
+  ok("detects 401, repairs renames, picks real variants, caches results");
+} catch (e) {
+  fail("model preflight", e.message);
+}
+
+// ── 10. Error classification ─────────────────────────────────
+console.log("10/11 error classification");
+try {
+  const { classifyError } = await import("../js/model-check.js");
+  const cases = [
+    ['Unauthorized access to file: "https://huggingface.co/a/b/resolve/main/x.onnx".', "unauthorized"],
+    ['Forbidden access to file: "https://huggingface.co/a/b/resolve/main/x.onnx".', "forbidden"],
+    ["Could not locate file: \"https://huggingface.co/a/b/resolve/main/x.onnx\".", "missing-file"],
+    ["Bad gateway error occurred while trying to load file: \"https://x/y\".", "server"],
+    ["Error (503) occurred while trying to load file: \"https://x/y\".", "server"],
+    ["The device (webgpu) does not support fp16.", "f16"],
+    ["WebGPU device lost", "gpu"],
+    ["Failed to allocate memory for buffer", "memory"],
+    ["MODEL_NOT_FOUND: foo is not shipped with this WebLLM build.", "not-in-build"],
+    ["QuotaExceededError: storage full", "storage"],
+  ];
+  const errs = [];
+  for (const [msg, expected] of cases) {
+    const got = classifyError(new Error(msg)).code;
+    if (got !== expected) errs.push(`${expected} ≠ ${got}`);
+  }
+  const located = classifyError(new Error(cases[0][0]));
+  if (!String(located.url).includes("huggingface.co")) errs.push("url not extracted");
+  if (located.status !== 401) errs.push("status not extracted");
+  if (errs.length) fail("classification", errs.join("; "));
+  else ok(`${cases.length} engine errors map to actionable codes`);
+} catch (e) {
+  fail("classification", e.message);
+}
+
+// ── 11. Potato profile + catalog invariants ──────────────────
+console.log("11/11 potato profile");
+try {
+  const c = await import("../js/config.js");
+  const mc = await import("../js/model-check.js");
+  const { potatoProfile, shouldSuggestPotato } = mc;
+  const errs = [];
+  const p = potatoProfile();
+  for (const [k, v] of Object.entries(p)) {
+    if (!(k in c.DEFAULT_SETTINGS)) errs.push(`potato sets unknown setting: ${k}`);
+    if (c.DEFAULT_SETTINGS[k] === undefined && v === undefined) errs.push(`${k} undefined`);
+  }
+  if (p.potato !== true || p.safeMode !== "on") errs.push("potato must enable Safe Mode");
+  const lightest = c.MODEL_CATALOG.filter((m) => m.stable).sort((a, b) => a.vramMB - b.vramMB)[0];
+  if (!lightest || lightest.vramMB > 700) errs.push(`no light WebGPU model to fall back to (${lightest?.key})`);
+  if (!(p.maxTokens <= c.DEFAULT_SETTINGS.maxTokens)) errs.push("potato must shrink answers");
+  if (!shouldSuggestPotato({ ramGB: 2, cores: 4, mobile: true, webgpu: { supported: true } })) errs.push("2 GB phone not flagged");
+  if (!shouldSuggestPotato({ ramGB: 4, cores: 4, mobile: true, webgpu: { supported: false } })) errs.push("old phone not flagged");
+  if (shouldSuggestPotato({ ramGB: 8, cores: 8, webgpu: { supported: false } })) errs.push("capable desktop without WebGPU should not be prompted");
+  if (shouldSuggestPotato({ ramGB: 8, cores: 8, webgpu: { supported: true } })) errs.push("strong device flagged");
+  // Verified-repo invariants: every WASM entry carries measured sizes and a
+  // preference order that the preflight can actually satisfy.
+  for (const m of c.WASM_CATALOG) {
+    if (m.engine !== "transformers") continue;
+    if (!Array.isArray(m.dtypes) || m.dtypes[0] !== "q8") errs.push(`${m.key}: q8 must come first`);
+    if (!m.files || typeof m.files !== "object") errs.push(`${m.key}: no verified sizes`);
+    else {
+      const first = m.files[m.dtypes[0]];
+      if (!(first > 0)) errs.push(`${m.key}: no size for ${m.dtypes[0]}`);
+      if (Math.abs(first - m.sizeMB) > Math.max(5, first * 0.1)) {
+        errs.push(`${m.key}: sizeMB ${m.sizeMB} ≠ measured ${first}`);
+      }
+      for (const d of m.dtypes) if (!(m.files[d] > 0)) errs.push(`${m.key}: missing size for ${d}`);
+    }
+    if (!mc.VERIFIED_REPOS.has(m.modelId)) {
+      errs.push(`${m.key}: ${m.modelId} was never verified against the Hub`);
+    }
+  }
+  if (errs.length) fail("potato/catalog", errs.slice(0, 4).join("; "));
+  else ok("potato profile valid · every WASM model has verified, consistent sizes");
+} catch (e) {
+  fail("potato/catalog", e.message);
 }
 
 console.log(failures ? `\n❌ ${failures} check(s) failed` : "\n🎉 all checks passed");

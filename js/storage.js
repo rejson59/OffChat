@@ -52,6 +52,9 @@ function migrateSettings(stored) {
   for (const key of ["glass", "avatars", "animations", "sendOnEnter", "onboarded"]) {
     out[key] = out[key] !== false;
   }
+  // 🐢 Potato mode flags are strictly boolean.
+  out.potato = out.potato === true;
+  out.potatoAsked = out.potatoAsked === true;
   if (!out.downloaded || typeof out.downloaded !== "object") out.downloaded = {};
   return out;
 }

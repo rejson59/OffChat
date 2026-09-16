@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 export const APP_NAME = "OffChat";
-export const APP_VERSION = "1.2.0";
+export const APP_VERSION = "1.3.0";
 
 /**
  * Pinned AI engine versions (immutable CDN builds).
@@ -115,6 +115,26 @@ export const MODEL_CATALOG = [
     needsF16: true, stable: true, tps: [40, 100],
     estDl: "~12–20 s",
     blurb: "Tiny and super fast. Basic quality, but runs literally everywhere.",
+  },
+  {
+    // f16-free variant: needs NO shader-f16, which is exactly what old
+    // phones/tablets lack — bundled with the 1B+ models by request only.
+    key: "smol360f32", engine: "webllm",
+    modelId: "SmolLM2-360M-Instruct-q4f32_1-MLC",
+    name: "SmolLM2 360M (f16-free)", family: "SmolLM2", params: "0.36B",
+    sizeMB: 300, vramMB: 580, ctx: 4096, quality: 2, tier: "ultra",
+    needsF16: false, stable: true, tps: [30, 80],
+    estDl: "~12–20 s",
+    blurb: "No shader-f16 required — the most compatible WebGPU model for very old GPUs.",
+  },
+  {
+    key: "gemma3-1b", engine: "webllm",
+    modelId: "gemma3-1b-it-q4f16_1-MLC",
+    name: "Gemma 3 1B", family: "Gemma", params: "1B",
+    sizeMB: 820, vramMB: 711, ctx: 4096, quality: 4, tier: "mini",
+    needsF16: false, stable: true, tps: [20, 55],
+    estDl: "~35–60 s",
+    blurb: "Google's 1B model: no f16 requirement and better answers than most 1B rivals.",
   },
   {
     key: "tinyllama", engine: "webllm",
@@ -368,69 +388,113 @@ export const MODEL_CATALOG = [
  * ONNX Runtime Web has for the CPU engine (q4f16 needs expensive fp16
  * emulation without a GPU), and the fallbacks cover repos that lack it.
  */
+/**
+ * Compatibility (WASM/CPU) catalog — Transformers.js.
+ *
+ * Every entry here is VERIFIED against the Hugging Face Hub
+ * (`/api/models/<repo>/tree/main/onnx`, 2026-09-16): the repository
+ * exists, is public, and the weight files listed in `files` are really
+ * published. `files` = download size per variant in MB (weights only),
+ * `externalData: true` = weights live in `…onnx_data` shards beside a
+ * tiny graph file (the engine must be told via `use_external_data_format`).
+ *
+ * WHY THIS MATTERS: Hugging Face answers **401 Unauthorized** for a
+ * repository that does not exist (or is private) — it does NOT return
+ * 404 — and Transformers.js reports that as
+ * `Unauthorized access to file: "https://huggingface.co/…"`, which
+ * looks like an account problem. A single wrong repository id (e.g. a
+ * model whose canonical name ends in `-ONNX`) therefore broke whole
+ * families of models. `js/model-check.js` re-checks every model at
+ * runtime, repairs renamed repos and picks a variant that exists.
+ *
+ * `dtypes` order: **q8 first** — it is ONNX Runtime's native WASM
+ * integer path and, for most of these repositories, also the smallest
+ * file; q4 second (`_q4`), q4f16 last (fp16 kernels are emulated on
+ * CPU, so that variant is the slowest despite being small).
+ */
 export const WASM_CATALOG = [
   {
     key: "w-smol135", engine: "transformers",
     modelId: "HuggingFaceTB/SmolLM2-135M-Instruct",
     name: "SmolLM2 135M", family: "SmolLM2", params: "135M",
-    sizeMB: 90, vramMB: 350, ctx: 2048, quality: 2, tier: "wasm",
-    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [4, 12],
-    estDl: "~5–8 s",
-    blurb: "Lightest fallback mode. Simple answers, minimal requirements.",
+    sizeMB: 137, vramMB: 350, ctx: 2048, quality: 2, tier: "wasm",
+    dtypes: ["q8", "q4", "q4f16"], files: { q4: 182, q8: 137, q4f16: 118 },
+    stable: true, tps: [4, 12], estDl: "~4–8 s",
+    blurb: "The lightest mode we have. Simple answers, runs on anything that can run a browser.",
   },
   {
     key: "w-smol360", engine: "transformers",
     modelId: "HuggingFaceTB/SmolLM2-360M-Instruct",
     name: "SmolLM2 360M", family: "SmolLM2", params: "360M",
-    sizeMB: 230, vramMB: 600, ctx: 2048, quality: 2, tier: "wasm",
-    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [2, 7],
-    estDl: "~12–18 s",
-    blurb: "Balanced CPU mode: decent speed and quality on weak hardware.",
+    sizeMB: 370, vramMB: 600, ctx: 2048, quality: 2, tier: "wasm",
+    dtypes: ["q8", "q4", "q4f16"], files: { q4: 388, q8: 365, q4f16: 273 },
+    stable: true, tps: [2, 7], estDl: "~10–18 s",
+    blurb: "Balanced CPU mode: noticeably better answers, still light on memory.",
   },
   {
-    key: "w-tinyllama", engine: "transformers",
-    modelId: "onnx-community/TinyLlama-1.1B-Chat-v1.0",
-    name: "TinyLlama 1.1B", family: "TinyLlama", params: "1.1B",
-    sizeMB: 680, vramMB: 1350, ctx: 2048, quality: 2, tier: "wasm",
-    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [1, 4],
-    estDl: "~30–45 s",
-    blurb: "Tiny and quick on CPU. Good for short chats without a GPU.",
+    key: "w-gemma270m", engine: "transformers",
+    modelId: "onnx-community/gemma-3-270m-it-ONNX",
+    name: "Gemma 3 270M", family: "Gemma", params: "270M",
+    sizeMB: 545, vramMB: 650, ctx: 2048, quality: 3, tier: "wasm",
+    dtypes: ["q8", "q4", "q4f16"], files: { q4: 323, q8: 545, q4f16: 273 },
+    externalData: true,
+    stable: true, tps: [3, 8], estDl: "~10–18 s",
+    blurb: "Google's newest tiny model — surprisingly coherent for its size.",
   },
   {
     key: "w-qwen05", engine: "transformers",
     modelId: "onnx-community/Qwen2.5-0.5B-Instruct",
     name: "Qwen 2.5 0.5B", family: "Qwen", params: "0.5B",
-    sizeMB: 450, vramMB: 900, ctx: 2048, quality: 3, tier: "wasm",
-    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [1, 4],
-    estDl: "~20–30 s",
-    blurb: "Best quality in CPU mode. Slower, but speaks beautifully.",
+    sizeMB: 520, vramMB: 900, ctx: 2048, quality: 3, tier: "wasm",
+    dtypes: ["q8", "q4", "q4f16"], files: { q4: 786, q8: 512, q4f16: 483 },
+    stable: true, tps: [1, 4], estDl: "~15–25 s",
+    blurb: "Best quality-per-megabyte in CPU mode. Slower, but speaks beautifully.",
   },
   {
-    key: "w-qwen15", engine: "transformers",
-    modelId: "onnx-community/Qwen2.5-1.5B-Instruct",
-    name: "Qwen 2.5 1.5B", family: "Qwen", params: "1.5B",
-    sizeMB: 950, vramMB: 1700, ctx: 2048, quality: 4, tier: "wasm",
-    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [0.5, 2],
-    estDl: "~45–70 s",
-    blurb: "Strong CPU option for patient users with faster processors.",
+    key: "w-qwen3-06", engine: "transformers",
+    modelId: "onnx-community/Qwen3-0.6B-ONNX",
+    name: "Qwen 3 0.6B", family: "Qwen", params: "0.6B",
+    sizeMB: 620, vramMB: 1100, ctx: 2048, quality: 3, tier: "wasm",
+    dtypes: ["q8", "q4", "q4f16"], files: { q4: 919, q8: 618, q4f16: 570 },
+    stable: true, tps: [1, 4], estDl: "~20–30 s",
+    blurb: "Newer Qwen generation in CPU mode: better reasoning, a bit heavier.",
+  },
+  {
+    key: "w-tinyllama", engine: "transformers",
+    modelId: "onnx-community/TinyLlama-1.1B-Chat-v1.0-ONNX",
+    name: "TinyLlama 1.1B", family: "TinyLlama", params: "1.1B",
+    sizeMB: 1100, vramMB: 1350, ctx: 2048, quality: 2, tier: "wasm",
+    dtypes: ["q8", "q4", "q4f16"], files: { q4: 910, q8: 1101, q4f16: 714 },
+    stable: true, tps: [1, 4], estDl: "~30–45 s",
+    blurb: "Tiny and quick on CPU. Good for short chats without a GPU.",
+  },
+  {
+    key: "w-llama1b", engine: "transformers",
+    modelId: "onnx-community/Llama-3.2-1B-Instruct-ONNX",
+    name: "Llama 3.2 1B", family: "Llama", params: "1B",
+    sizeMB: 1240, vramMB: 1300, ctx: 2048, quality: 4, tier: "wasm",
+    dtypes: ["q8", "q4", "q4f16"], files: { q4: 1693, q8: 1237, q4f16: 1090 },
+    externalData: true,
+    stable: true, tps: [0.5, 3], estDl: "~1–1.5 min",
+    blurb: "Strongest CPU mode for patient users with a decent processor.",
   },
   {
     key: "w-smol17", engine: "transformers",
     modelId: "HuggingFaceTB/SmolLM2-1.7B-Instruct",
     name: "SmolLM2 1.7B", family: "SmolLM2", params: "1.7B",
-    sizeMB: 1050, vramMB: 1900, ctx: 2048, quality: 3, tier: "wasm",
-    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [0.5, 2],
-    estDl: "~50–80 s",
+    sizeMB: 1710, vramMB: 1900, ctx: 2048, quality: 3, tier: "wasm",
+    dtypes: ["q8", "q4", "q4f16"], files: { q4: 1412, q8: 1714, q4f16: 1109 },
+    stable: true, tps: [0.5, 2], estDl: "~1–1.5 min",
     blurb: "Bigger brain for CPU mode — slow, but surprisingly clever.",
   },
   {
-    key: "w-llama1b", engine: "transformers",
-    modelId: "onnx-community/Llama-3.2-1B-Instruct",
-    name: "Llama 3.2 1B", family: "Llama", params: "1B",
-    sizeMB: 750, vramMB: 1300, ctx: 2048, quality: 4, tier: "wasm",
-    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [0.5, 3],
-    estDl: "~35–50 s",
-    blurb: "Strongest CPU mode — for patient users with beefy processors.",
+    key: "w-qwen15", engine: "transformers",
+    modelId: "onnx-community/Qwen2.5-1.5B-Instruct",
+    name: "Qwen 2.5 1.5B", family: "Qwen", params: "1.5B",
+    sizeMB: 1590, vramMB: 1700, ctx: 2048, quality: 4, tier: "wasm",
+    dtypes: ["q8", "q4", "q4f16"], files: { q4: 1787, q8: 1578, q4f16: 1221 },
+    stable: true, tps: [0.5, 2], estDl: "~1–1.5 min",
+    blurb: "Strong CPU option for patient users with faster processors.",
   },
 ];
 
@@ -453,6 +517,8 @@ export const DEFAULT_SETTINGS = {
   bgStyle: "aurora",        // aurora | tide | solid
   glass: true,              // glassmorphism (blur) — off saves weak GPUs
   safeMode: "auto",         // auto | on | off — protects weak GPUs from crashes
+  potato: false,            // 🐢 Potato mode — one-click profile for ancient phones
+  potatoAsked: false,       // has the Potato-mode suggestion been shown already?
   fontSize: 15,             // chat font size in px (13–18)
   bubbleStyle: "round",     // soft | round | sharp
   avatars: true,            // show message avatars

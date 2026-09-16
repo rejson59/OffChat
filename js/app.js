@@ -22,6 +22,9 @@ import {
 } from "./resilience.js";
 import { renderMarkdown, estimateTokens } from "./markdown.js";
 import {
+  probeWasmModel, classifyError, potatoProfile, shouldSuggestPotato,
+} from "./model-check.js";
+import {
   $, $all, el, toast, openModal, confirmDialog,
   fmtBytes, fmtSizeMB, timeAgo, autoTitle, copyText, downloadFile, escapeHtml,
 } from "./ui.js";
@@ -1357,8 +1360,105 @@ function isGpuError(e) {
   return /device lost|lost device|out of memory|OOM|allocation failed|failed to allocate|webgpu/i.test(m);
 }
 
+/** Host of a URL, for compact error messages. */
+function shortHost(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * A model whose repository could not be verified (missing, renamed or
+ * private). Hugging Face answers 401 for those, so this carries the
+ * reason down to `friendlyError` instead of a cryptic library string.
+ */
+function modelCheckError(model, check) {
+  const e = new Error(
+    `MODEL_UNAVAILABLE: ${model.modelId} (${check.code}${check.status ? ` · HTTP ${check.status}` : ""})`
+  );
+  e.code = check.code;
+  e.status = check.status ?? null;
+  e.modelKey = model.key;
+  e.tried = check.tried || [];
+  return e;
+}
+
+/**
+ * 🐢 Potato mode — one click for very weak / very old phones:
+ * lightest model, tiny context, no blur, no animations, quick unload.
+ */
+function applyPotatoMode() {
+  S.settings = saveSettings(potatoProfile());
+  // Pick the lightest model that still fits — and swap out a heavy one,
+  // otherwise "potato mode" would only change the colours.
+  const pool = (S.hw?.webgpu?.supported === false ? WASM_CATALOG : MODEL_CATALOG)
+    .filter((m) => m.stable);
+  const lightest = pool.slice().sort((a, b) => (a.vramMB || 0) - (b.vramMB || 0))[0];
+  const current = S.settings.modelKey ? getModel(S.settings.modelKey) : null;
+  const tooHeavy = current && (current.tier === "pro" || current.tier === "max" || current.vramMB > 1600);
+  if (lightest && (!current || tooHeavy)) {
+    S.settings = saveSettings({ modelKey: lightest.key });
+    S.potatoModelName = lightest.name;
+  }
+  applyAppearance();
+  applyAnims();
+  applySafeMode();
+  S.idleWatcher?.refresh?.();
+}
+
+/** Offer Potato mode once, when the device really looks like a potato. */
+async function maybeSuggestPotato() {
+  if (S.settings.potato || S.settings.potatoAsked) return;
+  if (!shouldSuggestPotato(S.hw)) return;
+  S.settings = saveSettings({ potatoAsked: true });
+  const ok = await confirmDialog({
+    title: "🐢 Potato mode?",
+    text: "This device looks light (little RAM, few cores or no WebGPU). Potato mode picks the smallest model, "
+      + "shrinks the context window and turns off blur/animations so OffChat stays responsive instead of crashing.",
+    okLabel: "Enable potato mode",
+  });
+  if (ok) {
+    applyPotatoMode();
+    toast("Potato mode on 🐢 — lightest model, tiny context, no effects", "ok", 6000);
+  }
+}
+
 function friendlyError(e) {
   const m = String(e?.message || e || "");
+  // Prefer the machine-readable diagnosis attached by the engine /
+  // model preflight; fall back to reading the raw message.
+  const info = e?.code
+    ? { code: e.code, status: e.status ?? null, url: e.url || null }
+    : classifyError(e);
+  const where = info.url ? ` (${shortHost(info.url)})` : "";
+
+  // The classic one: HTTP 401 from the Hub means the repository is
+  // missing, renamed or private — NOT that the user did something wrong.
+  if (info.code === "unauthorized") {
+    return "That model could not be found on Hugging Face (it was renamed, removed or is private) — the Hub answers "
+      + "such requests with 401 Unauthorized" + where + ". OffChat repairs renamed repositories automatically, "
+      + "so pick another model from the list (SmolLM2 and Gemma 3 270M are verified to work).";
+  }
+  if (info.code === "forbidden") {
+    return "Hugging Face refused this file (HTTP 403 — the model is gated or the download limit was hit" + where + "). "
+      + "Gated models need an account, which a browser-only app cannot use — choose an open model instead.";
+  }
+  if (info.code === "missing-file") {
+    return "This model does not publish the requested variant on Hugging Face" + where + ". "
+      + "Pick the model again — OffChat will fall back to another quantisation automatically.";
+  }
+  if (info.code === "server") {
+    return "Hugging Face had a server hiccup (HTTP 5xx" + where + "). Wait a moment and retry — the download resumes from the cache.";
+  }
+  if (info.code === "storage") {
+    return "Not enough storage for this model. Free some space (Settings → Clear model cache) or pick a smaller model.";
+  }
+  if (info.code === "offline") {
+    return "You are offline — connect to the internet and retry. Models already downloaded keep working offline.";
+  }
+
   if (/device lost|lost device/i.test(m)) {
     return "The GPU crashed (device lost) — the model was unloaded to protect the page. Enable Safe Mode and try a smaller model or the CPU mode.";
   }
@@ -1369,8 +1469,8 @@ function friendlyError(e) {
     return "WebGPU trouble — reload the page or pick the compatibility (WASM) mode.";
   }
   if (/network|fetch|Failed to fetch|Load failed|resolve module|CORS|networkerror/i.test(m)) {
-    return "Network trouble — the model or the engine library could not be downloaded. Check your connection (or blocking extensions) and retry. " +
-      "If the model was downloaded before, the browser may have cleared its cache — pick it again to re-download.";
+    return "Network trouble — the model or the engine library could not be downloaded. Check your connection (or blocking extensions) and retry. "
+      + "If the model was downloaded before, the browser may have cleared its cache — pick it again to re-download.";
   }
   if (/MODEL_NOT_FOUND/i.test(m)) return m.replace("MODEL_NOT_FOUND: ", "");
   if (/engine is not loaded|lost its model|not loaded/i.test(m)) {
@@ -1562,12 +1662,28 @@ async function loadModel(key, { auto = false } = {}) {
           onProgress,
         });
       } else {
+        // Verify the repository and the weight variant BEFORE downloading
+        // hundreds of MB. Hugging Face answers 401 for a repo that does not
+        // exist, so a wrong id used to surface as "Unauthorized access to
+        // file" — this catches it (and repairs renamed repos) first.
+        let repo = model.modelId;
+        let dtypes = model.dtypes || ["q8", "q4", "q4f16"];
+        let externalData = 0;
+        if (!S.settings.downloaded[key]) {
+          setStatus("load", `${model.name} · checking…`);
+          const check = await probeWasmModel(model, { force: !auto });
+          if (!check.ok) throw modelCheckError(model, check);
+          repo = check.repo;
+          if (check.dtype) dtypes = [check.dtype, ...dtypes.filter((d) => d !== check.dtype)];
+          externalData = check.data?.length || 0;
+        }
         const threads = hw.crossIsolated ? Math.min(hw.cores || 4, 4) : 1;
         await S.proxy.loadTransformers({
-          modelId: model.modelId,
-          dtypes: model.dtypes || ["q4f16", "q4", "q8"],
+          modelId: repo,
+          dtypes,
           device: "wasm",
           threads,
+          externalData,
           onProgress,
         });
       }
@@ -1597,6 +1713,13 @@ async function loadModel(key, { auto = false } = {}) {
       S.settings = saveSettings({ downloaded: next });
     }
     toast(friendlyError(e), "error", 6000);
+    // A model that is gone/renamed/gated: point at one that is verified.
+    if (["unauthorized", "forbidden", "missing-file"].includes(e?.code)) {
+      const alt = (model.engine === "transformers" ? WASM_CATALOG : MODEL_CATALOG)
+        .filter((m) => m.stable && m.key !== model.key)
+        .sort((a, b) => a.sizeMB - b.sizeMB)[0];
+      if (alt) toast(`Try “${alt.name}” instead — it is verified to install. ✔`, "info", 9000);
+    }
     if (isGpuError(e)) {
       // Give the hub a moment to close before showing recovery.
       setTimeout(() => offerGpuRecovery(), 350);
@@ -1859,6 +1982,9 @@ function openModelPicker() {
       </div>`,
   });
 
+  // Weak device? Offer the one-click Potato profile right when it matters.
+  if (!S.settings.potatoAsked) setTimeout(() => maybeSuggestPotato(), 600);
+
   const filterPills = body.querySelectorAll(".filter-pill");
   filterPills.forEach((pill) => {
     pill.addEventListener("click", () => {
@@ -1953,6 +2079,11 @@ function openSettings() {
         <option value="full" ${s.ctxCap === "full" ? "selected" : ""}>Full (model default)</option>
       </select>
       <small class="hint">Smaller context = less GPU memory = fewer crashes. Applies when a model loads.</small></div>
+
+    <div class="set-section">Slow devices</div>
+    <div class="switch-row"><span>🐢 Potato mode<small>One click for very old phones: smallest model, tiny context, no blur, no animations, quick memory release.</small></span>
+      <label class="switch"><input type="checkbox" id="sw-potato" ${s.potato ? "checked" : ""}><i></i></label></div>
+    <div class="row end"><button class="btn ghost sm" id="btn-potato">Apply the potato profile now</button></div>
 
     <div class="set-section">Generation</div>
     <div class="field"><label>Temperature (creativity) <output id="o-temp">${s.temperature.toFixed(2)}</output></label>
@@ -2067,6 +2198,20 @@ function openSettings() {
   body.querySelector("#sw-avatars").addEventListener("change", (e) => {
     S.settings = saveSettings({ avatars: e.target.checked });
     applyAppearance();
+  });
+  body.querySelector("#sw-potato").addEventListener("change", (e) => {
+    if (e.target.checked) {
+      applyPotatoMode();
+      toast("Potato mode on 🐢 — smallest model, tiny context, no effects", "ok", 6000);
+    } else {
+      S.settings = saveSettings({ potato: false });
+      toast("Potato mode off — full quality restored", "info");
+    }
+  });
+  body.querySelector("#btn-potato").addEventListener("click", () => {
+    applyPotatoMode();
+    body.querySelector("#sw-potato").checked = true;
+    toast("Potato profile applied 🐢", "ok", 5000);
   });
   body.querySelector("#sw-enter").addEventListener("change", (e) => {
     S.settings = saveSettings({ sendOnEnter: e.target.checked });

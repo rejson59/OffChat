@@ -11,7 +11,7 @@ A lightweight, static chat with a Small Language Model running 100% client-side.
 ## ✨ Features
 
 - 🧠 **In-browser AI** — main engine **WebLLM (WebGPU)**, emergency fallback **Transformers.js (WASM/CPU)**
-- 📱 **Mobile-first** — no frameworks, ~70 KB gzipped of own code (and the heavy parts are code-split), inference in a Web Worker
+- 📱 **Mobile-first** — no frameworks or bundler, ~90 KB gzipped of own code (heavy parts are code-split), inference in a Web Worker
 - 🔍 **Automatic model matching** — hardware probe (WebGPU, F16, RAM, cores, free space) + a memory budget with a safety margin
 - 🛡️ **Safe Mode** — auto-detects weak GPUs and simplifies visuals, caps memory, warns before risky models and helps recover from GPU crashes
 - ⚡ **Speed estimates** — every model card shows its expected generation speed in tokens/sec, plus filters and sorting (fastest / smallest / best quality)
@@ -31,6 +31,8 @@ A lightweight, static chat with a Small Language Model running 100% client-side.
 - ⚡ **Built for weak devices** — incremental streaming renderer, batched token streaming, message cache, deferred boot, lazy modules (see below)
 - 🧠 **Idle memory release** — the model frees GPU/RAM memory when you stop using it (auto: 6 min on phones, 30 min on desktop), which prevents the OOM kills that make mobile browsers drop tabs
 - 💾 **Crash-proof work** — the unsent draft and every streaming answer are mirrored to storage, so a crash/reload never loses what you typed or waited for; interrupted answers come back with a **Continue** button
+- 🐢 **Potato mode** — one switch for ancient phones: lightest model, 1024-token context, no blur, no animations, quick memory release (offered automatically on weak devices)
+- 🔎 **Model preflight** — before downloading a single byte OffChat checks the model really exists on Hugging Face, repairs renamed repositories (`-ONNX`) and picks a weight variant that is actually published
 - 🐢 **Slow-model tips** — when an answer crawls (under ~3 tok/s) OffChat suggests a lighter model that will feel faster on that device
 - 🛠️ **Self-healing engine** — if the Worker or the GPU dies mid-answer, the app rebuilds the engine, reloads the model from cache and retries the message instead of failing
 
@@ -49,6 +51,7 @@ OffChat/
 ├── js/
 │   ├── app.js              # orchestration: boot, onboarding, chat, threads, settings
 │   ├── config.js           # engine versions, model catalog, default settings
+│   ├── model-check.js      # Hugging Face preflight, error translation, potato profile
 │   ├── resilience.js       # crash guard: draft, interrupted answers, idle release
 │   ├── stream-render.js    # incremental Markdown renderer for streamed answers
 │   ├── download-hub.js     # download telemetry, floating dock, NeuroPong mini-game, AI facts, templates
@@ -118,12 +121,14 @@ Speeds are estimates in tokens/sec: phones land near the low end, desktop GPUs n
 |---|---|---|---|---|---|
 | SmolLM2 135M | ~60 MB | 360 MB | 60–150 tok/s | ★★☆☆☆ | ultra — runs everywhere |
 | SmolLM2 360M | ~260 MB | 376 MB | 40–100 tok/s | ★★☆☆☆ | ultra |
+| SmolLM2 360M (f16-free) | ~300 MB | 580 MB | 30–80 tok/s | ★★☆☆☆ | ultra — works without shader-f16 |
 | TinyLlama 1.1B | ~700 MB | 697 MB | 25–70 tok/s | ★★☆☆☆ | mini — a tiny classic |
 | Llama 3.2 1B | ~800 MB | 879 MB | 20–60 tok/s | ★★★★☆ | mini — favorite for weak phones |
 | Qwen 2.5 0.5B | ~460 MB | 944 MB | 30–80 tok/s | ★★★☆☆ | mini |
 | Qwen Coder 0.5B 💻 | ~460 MB | 945 MB | 30–80 tok/s | ★★★☆☆ | mini — pocket coding helper |
 | Qwen 3 0.6B 🧪 | ~600 MB | 1403 MB | 25–70 tok/s | ★★★☆☆ | smart |
 | Gemma 2 2B (1k) | ~1.5 GB | 1583 MB | 12–35 tok/s | ★★★★☆ | smart |
+| Gemma 3 1B | ~820 MB | 711 MB | 20–55 tok/s | ★★★★☆ | mini — no f16 needed, great answers |
 | **Qwen 2.5 1.5B** | ~1 GB | 1629 MB | 15–45 tok/s | ★★★★☆ | smart — mid-weight king |
 | Qwen Coder 1.5B 💻 | ~1 GB | 1630 MB | 15–40 tok/s | ★★★★☆ | smart — code specialist |
 | SmolLM2 1.7B | ~1.1 GB | 1774 MB | 15–45 tok/s | ★★★☆☆ | smart |
@@ -148,9 +153,47 @@ Speeds are estimates in tokens/sec: phones land near the low end, desktop GPUs n
 
 🧪 = base/experimental variant (never the default recommendation). 💻 = code specialist. 🧠 = reasoning model (thinks before answering, slower output).
 
-### WASM compatibility mode (Transformers.js, ONNX q4)
+### WASM compatibility mode (Transformers.js, ONNX)
 
-SmolLM2 135M (~90 MB, 4–12 tok/s) · SmolLM2 360M (~230 MB, 2–7 tok/s) · TinyLlama 1.1B (~680 MB, 1–4 tok/s) · Qwen 2.5 0.5B (~450 MB, 1–4 tok/s) · Qwen 2.5 1.5B (~950 MB, 0.5–2 tok/s) · SmolLM2 1.7B (~1 GB, 0.5–2 tok/s) · Llama 3.2 1B (~750 MB, 0.5–3 tok/s).
+Every id below was verified against the Hugging Face tree API — the repository exists, is public and really publishes the listed quantisations. OffChat prefers **q8** (ONNX Runtime's native int8 path, usually the smallest file too), then q4, then q4f16.
+
+| Model | Repository | q8 / q4 / q4f16 | Speed (est.) |
+|---|---|---|---|
+| SmolLM2 135M | `HuggingFaceTB/SmolLM2-135M-Instruct` | 137 / 182 / 118 MB | 4–12 tok/s |
+| SmolLM2 360M | `HuggingFaceTB/SmolLM2-360M-Instruct` | 365 / 388 / 273 MB | 2–7 tok/s |
+| Gemma 3 270M | `onnx-community/gemma-3-270m-it-ONNX` | 545 / 323 / 273 MB | 2–6 tok/s |
+| Qwen 2.5 0.5B | `onnx-community/Qwen2.5-0.5B-Instruct` | 512 / 786 / 483 MB | 1–5 tok/s |
+| Qwen 3 0.6B | `onnx-community/Qwen3-0.6B-ONNX` | 618 / 919 / 570 MB | 1–4 tok/s |
+| TinyLlama 1.1B | `onnx-community/TinyLlama-1.1B-Chat-v1.0-ONNX` | 1101 / 910 / 714 MB | 1–4 tok/s |
+| Llama 3.2 1B | `onnx-community/Llama-3.2-1B-Instruct-ONNX` | 1237 / 1693 / 1090 MB | 0.5–3 tok/s |
+| SmolLM2 1.7B | `HuggingFaceTB/SmolLM2-1.7B-Instruct` | 1714 / 1412 / 1109 MB | 0.5–2 tok/s |
+| Qwen 2.5 1.5B | `onnx-community/Qwen2.5-1.5B-Instruct` | 1578 / 1787 / 1221 MB | 0.5–2 tok/s |
+
+Gemma 3 270M and Llama 3.2 1B ship their weights in `*_data` shards — OffChat detects that and passes `use_external_data_format` to the engine.
+
+## 🥔 Potato mode (for ancient phones)
+
+One switch in **Settings → Slow devices** (or the automatic prompt when the device looks weak):
+
+- the smallest verified model is selected for you,
+- context window capped at 1024 tokens, answers at 192 tokens,
+- blur, animations and avatars off, plain background,
+- the model is released from memory after ~5 minutes idle.
+
+The point is not beauty — it is that a 2018 phone with 2–3 GB RAM finishes an answer instead of being killed by the browser.
+
+## 🔎 Why a model sometimes refuses to install
+
+Hugging Face answers **401 Unauthorized** for a repository that *does not exist*, is private, or was renamed — never 404. Transformers.js then reports `Unauthorized access to file: "…"`, which reads like an account problem even though a browser-only app never sends credentials.
+
+OffChat handles this before any download:
+
+1. **Preflight** (`model-check.js`) asks the Hub tree API for the model's `onnx/` folder (24 h cache).
+2. **Rename repair** — if an id 401s, canonical candidates (`-ONNX` suffix, as used by `onnx-community`) are tried.
+3. **Variant check** — only quantisations that really exist are used, and external-data shards are counted.
+4. **Honest errors** — 401/403/404/5xx are translated into plain language with a next step, and OffChat suggests a verified model instead.
+
+Gated repositories (downloads behind a licence acceptance) cannot be used from a plain browser page, because no token can be attached to the request — OffChat says so instead of blaming your connection.
 
 ## ⚡ How OffChat stays fast on slow hardware
 
@@ -166,6 +209,8 @@ SmolLM2 135M (~90 MB, 4–12 tok/s) · SmolLM2 360M (~230 MB, 2–7 tok/s) · Ti
 | **Cheap composer** | Auto-growing the textarea is coalesced to one layout pass per frame and skipped for short single-line input. |
 | **No smooth-scroll storm** | The message list scrolls instantly while streaming (smooth scrolling is used only for explicit "jump to bottom"). |
 | **Visual budget** | Safe Mode drops the 90px-blurred background layers for one static gradient, blur is reduced on mobile, and animations/layers are turned off when not needed. |
+| **No wasted downloads** | The model preflight is a few kB of JSON: a wrong or removed model is rejected in milliseconds instead of after hundreds of MB. |
+| **Variant ordering** | q8 is tried first — ONNX Runtime's native int8 kernels are the cheapest path on CPUs, and the file is often the smallest of the three. |
 
 ## 🧯 How we handle crashes (so you see fewer of them)
 

@@ -7,6 +7,7 @@
 // Engine libraries load LAZILY from a CDN (with a fallback list).
 // ─────────────────────────────────────────────────────────────
 import { ENGINE_CDN, ORT_WASM_CDN } from "./config.js";
+import { classifyError } from "./model-check.js";
 
 async function importFirst(urls) {
   let lastErr = null;
@@ -30,6 +31,21 @@ async function importFirst(urls) {
 export function isDeviceCrash(err) {
   const m = String((err && (err.message || err)) || "");
   return /device lost|lost device|out of memory|\bOOM\b|allocation failed|failed to allocate|createBuffer|internal error|mapAsync|GPUDevice|GPU buffer/i.test(m);
+}
+
+/**
+ * Attach a machine-readable code (see model-check.classifyError) to an
+ * engine error. The worker forwards `code`/`status`/`url` to the main
+ * thread, so the UI can explain *why* a model failed instead of dumping
+ * a raw library string at the user.
+ */
+export function markError(err) {
+  const info = classifyError(err);
+  const e = err instanceof Error ? err : new Error(String(err || "Engine error"));
+  if (!e.code) e.code = info.code;
+  if (e.status === undefined) e.status = info.status;
+  if (!e.url) e.url = info.url;
+  return e;
 }
 
 function mapWebLLMProgress(rep) {
@@ -169,11 +185,16 @@ export class Engine {
     };
 
     onProgress?.({ phase: "download", progress: 0, text: "Connecting… (first download weighs hundreds of MB)" });
-    this.wEngine = await webllm.CreateMLCEngine(modelId, {
-      appConfig,
-      logLevel: "WARN",
-      initProgressCallback: (rep) => onProgress?.(mapWebLLMProgress(rep)),
-    });
+    try {
+      this.wEngine = await webllm.CreateMLCEngine(modelId, {
+        appConfig,
+        logLevel: "WARN",
+        initProgressCallback: (rep) => onProgress?.(mapWebLLMProgress(rep)),
+      });
+    } catch (e) {
+      // e.g. an unreachable weight repo, a GPU limit, or a broken cache
+      throw markError(e);
+    }
     this.kind = "webllm";
     this.modelId = modelId;
     onProgress?.({ phase: "ready", progress: 1, text: "Model ready" });
@@ -240,7 +261,7 @@ export class Engine {
   }
 
   // ── Transformers.js (WASM/CPU) ───────────────────────────────
-  async loadTransformers({ modelId, dtypes = ["q4f16", "q4", "q8"], device = "wasm", threads = 1, onProgress }) {
+  async loadTransformers({ modelId, dtypes = ["q8", "q4", "q4f16"], device = "wasm", threads = 1, externalData = 0, onProgress }) {
     this.abort();
     onProgress?.({ phase: "download", progress: 0, text: "Loading the Transformers.js engine (WASM)…" });
     const tf = (this.tf ||= await importFirst(ENGINE_CDN.transformers));
@@ -285,6 +306,10 @@ export class Engine {
         this.pipe = await tf.pipeline("text-generation", modelId, {
           device,
           dtype,
+          // Repos like gemma-3-270m / Llama-3.2-1B keep the weights in
+          // `model_q4.onnx_data` shards next to a tiny graph file; without
+          // this flag ONNX Runtime cannot build the session at all.
+          ...(externalData ? { use_external_data_format: externalData } : {}),
           progress_callback: (p) => onProgress?.(mapTFProgress(p, dtype)),
         });
         this.tok = this.pipe.tokenizer;
@@ -293,14 +318,14 @@ export class Engine {
         onProgress?.({ phase: "ready", progress: 1, text: "Model ready" });
         return { modelId, engine: "transformers", dtype };
       } catch (e) {
-        lastErr = e;
+        lastErr = markError(e);
         this.pipe = null;
         this.tok = null;
       }
     }
     throw lastErr instanceof Error
       ? lastErr
-      : new Error(`Could not load model ${modelId} in any variant.`);
+      : markError(new Error(`Could not load model ${modelId} in any variant.`));
   }
 
   buildTFPrompt(messages) {

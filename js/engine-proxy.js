@@ -139,6 +139,9 @@ export class EngineProxy {
       clearTimeout(p.timer);
       const err = new Error(msg.data?.message || "AI engine error");
       err.fromEngine = true; // a model error, not a transport failure
+      err.code = msg.data?.code || undefined;
+      err.status = msg.data?.status ?? undefined;
+      err.url = msg.data?.url || undefined;
       p.reject(err);
     }
   }
