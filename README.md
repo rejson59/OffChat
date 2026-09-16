@@ -42,7 +42,6 @@ OffChat/
 │   ├── markdown.js         # leciutki renderer Markdown (bez zależności, anty-XSS)
 │   └── ui.js               # toasty, modale, formatowanie
 ├── icons/                  # ikony PWA (192/512/maskable/apple/favicon/SVG)
-└── .github/workflows/      # deployment na GitHub Pages
 ```
 
 ## 🚀 Deployment na GitHub Pages
