@@ -54,9 +54,30 @@ Repo jest gotowe do wdrożenia **bez kroku build** — to czyste statyczne pliki
 2. GitHub → *Settings → Pages → Source: Deploy from a branch* → wybierz `main` i `/ (root)`.
 3. Gotowe: `https://<user>.github.io/OffChat/`.
 
-**Opcja B — przez GitHub Actions:**
-1. W repo jest już workflow `.github/workflows/pages.yml`.
-2. GitHub → *Settings → Pages → Source: GitHub Actions*.
+**Opcja B — przez GitHub Actions (opcjonalnie):**
+1. GitHub → *Settings → Pages → Source: GitHub Actions*.
+2. Utwórz ręcznie plik `.github/workflows/pages.yml` o treści (standardowy deployment statyczny):
+
+```yaml
+name: Deploy to GitHub Pages
+on:
+  push: { branches: ["main"] }
+  workflow_dispatch:
+permissions: { contents: read, pages: write, id-token: write }
+concurrency: { group: "pages", cancel-in-progress: false }
+jobs:
+  deploy:
+    environment: { name: github-pages, url: ${{ steps.deployment.outputs.page_url }} }
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: "." }
+      - id: deployment
+        uses: actions/deploy-pages@v4
+```
+
 3. Każdy push na `main` wdraża stronę automatycznie.
 
 > Wszystkie ścieżki są względne (`./`), więc działa zarówno pod `/OffChat/`, jak i na własnej domenie.
