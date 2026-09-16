@@ -5,24 +5,32 @@
 import {
   APP_VERSION, MODEL_CATALOG, WASM_CATALOG, getModel, formatTps,
   DEFAULT_SETTINGS, LIMITS, TIERS, ACCENTS, BG_STYLES, BUBBLE_STYLES,
+  IDLE_UNLOAD_MS,
 } from "./config.js";
 import {
   probeHardware, recommendModels, suggestContextWindow, deviceSummary,
-  isWeakDevice,
+  isWeakDevice, perfTier,
 } from "./hardware.js";
 import {
   loadSettings, saveSettings, Threads, Messages,
   exportAll, importAll, storageInfo, clearModelCaches,
 } from "./storage.js";
 import { EngineProxy } from "./engine-proxy.js";
-import { DownloadHub } from "./download-hub.js";
+import { StreamRenderer } from "./stream-render.js";
+import {
+  Draft, BusyMark, IdleUnloader, isInterruptedMessage, closedPartialStats,
+} from "./resilience.js";
 import { renderMarkdown, estimateTokens } from "./markdown.js";
+import {
+  probeWasmModel, classifyError, potatoProfile, shouldSuggestPotato,
+} from "./model-check.js";
 import {
   $, $all, el, toast, openModal, confirmDialog,
   fmtBytes, fmtSizeMB, timeAgo, autoTitle, copyText, downloadFile, escapeHtml,
 } from "./ui.js";
 
 let downloadHub = null;
+let downloadHubPromise = null;
 
 const S = {
   settings: loadSettings(),
@@ -30,7 +38,10 @@ const S = {
   rec: null,
   threads: [],
   activeId: null,
-  proxy: new EngineProxy(),
+  proxy: new EngineProxy({
+    onCrash: () => toast("The AI engine restarted itself — the next message may take a few seconds longer. 🛠️", "warn", 5000),
+    onRecovering: () => setStatus("load", "restoring the AI engine…"),
+  }),
   engineLoaded: false,
   engineModelKey: null,
   model: null,
@@ -41,7 +52,121 @@ const S = {
   nearBottom: true,
   threadFilter: "",
   queuedPrompt: null,
+  // performance / resilience additions
+  perf: "mid",           // "low" | "mid" | "high" — drives adaptive repainting
+  safeActive: false,
+  msgCache: new Map(),   // threadId -> messages (avoids repeated IndexedDB reads)
+  idleWatcher: null,
+  crashRecovery: null,   // a generation that a previous session died on
+  hiddenAt: 0,
+  lastIdleTouch: 0,
+  slowHintShown: false,
 };
+
+/**
+ * The download hub (telemetry, mini-game, facts, templates) is ~36 KB of
+ * code that nobody needs before a download starts. It is imported on
+ * demand (and prefetched while the app is idle) so a weak phone boots
+ * without parsing it.
+ */
+function ensureDownloadHub() {
+  downloadHubPromise ||= import("./download-hub.js")
+    .then(({ DownloadHub }) => {
+      downloadHub = new DownloadHub({
+        onMinimize: () => {
+          toast("Downloading in the background (widget at the bottom) — feel free to browse chats and settings! 🔍", "info", 4500);
+        },
+        onExpand: () => {},
+        onAbort: () => {
+          S.proxy.abort();
+          S.downloading = false;
+          // Dequeue the question: remove the "⏳" marker and put the text
+          // back into the message box so it's easy to resend.
+          if (S.queuedPrompt) {
+            const { text, placeholderNode } = S.queuedPrompt;
+            S.queuedPrompt = null;
+            if (placeholderNode?.parentNode) placeholderNode.remove();
+            const ta = $("#input");
+            if (ta) {
+              ta.value = text;
+              lastGrowProbe = "";
+              autogrow();
+              $("#btn-send").classList.add("ready");
+            }
+          }
+          setStatus("idle", "download cancelled");
+          toast("Download cancelled — your question is back in the box, send it again", "warn", 5000);
+        },
+        onUsePrompt: (promptText) => {
+          const ta = $("#input");
+          if (ta) {
+            ta.value = promptText;
+            autogrow();
+            ta.focus();
+            toast("Prompt pasted into the chat! ✨", "ok");
+          }
+        },
+        onQueuePrompt: (promptText) => {
+          queuePrompt(promptText);
+        },
+      });
+      downloadHub.setLowFx(!!S.safeActive);
+      return downloadHub;
+    })
+    .catch(() => null);
+  return downloadHubPromise;
+}
+
+/** Warm the hub module up while nothing else is happening. */
+function prefetchDownloadHub() {
+  whenIdle(() => { ensureDownloadHub(); }, 3000);
+}
+
+/** Run work when the browser is idle (with a hard fallback for old engines). */
+function whenIdle(fn, timeout = 1000) {
+  try {
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(() => fn(), { timeout });
+      return;
+    }
+  } catch { /* fall through */ }
+  setTimeout(fn, 0);
+}
+
+// ── Message cache (weak devices: avoid re-reading IndexedDB constantly) ──
+// Only a few threads are kept in memory — a chat with hundreds of long
+// answers is megabytes, and a weak phone has none to spare.
+const MAX_CACHED_THREADS = 4;
+
+async function getMessages(threadId, { refresh = false } = {}) {
+  if (!threadId) return [];
+  if (!refresh && S.msgCache.has(threadId)) {
+    const cached = S.msgCache.get(threadId);
+    S.msgCache.delete(threadId); // re-insert = most recently used
+    S.msgCache.set(threadId, cached);
+    return cached;
+  }
+  const list = await Messages.list(threadId, 1000).catch(() => []);
+  S.msgCache.set(threadId, list);
+  while (S.msgCache.size > MAX_CACHED_THREADS) {
+    const oldest = S.msgCache.keys().next().value;
+    if (oldest === threadId) break;
+    S.msgCache.delete(oldest);
+  }
+  return list;
+}
+
+function cacheAdd(threadId, msg) {
+  const list = S.msgCache.get(threadId);
+  if (!list) return;
+  list.push(msg);
+  if (list.length > 1200) list.splice(0, list.length - 1000);
+}
+
+function cachePatch(threadId, id, patch) {
+  const m = S.msgCache.get(threadId)?.find((x) => x.id === id);
+  if (m) Object.assign(m, patch);
+}
 
 const STATUS_META = {
   idle: "Idle",
@@ -146,122 +271,214 @@ async function boot() {
     else if (typeof mq.addListener === "function") mq.addListener(onChange);
   } catch { /* older browsers — ignore */ }
 
-  // Download Hub init (telemetry, games, facts, dock)
-  downloadHub = new DownloadHub({
-    onMinimize: () => {
-      toast("Downloading in the background (widget at the bottom) — feel free to browse chats and settings! 🔍", "info", 4500);
-    },
-    onExpand: () => {},
-    onAbort: () => {
-      S.proxy.abort();
-      S.downloading = false;
-      // Dequeue the question: remove the "⏳" marker and put the text
-      // back into the message box so it's easy to resend.
-      if (S.queuedPrompt) {
-        const { text, placeholderNode } = S.queuedPrompt;
-        S.queuedPrompt = null;
-        if (placeholderNode?.parentNode) placeholderNode.remove();
-        const ta = $("#input");
-        if (ta) {
-          ta.value = text;
-          autogrow();
-        }
-      }
-      setStatus("idle", "download cancelled");
-      toast("Download cancelled — your question is back in the box, send it again", "warn", 5000);
-    },
-    onUsePrompt: (promptText) => {
-      const ta = $("#input");
-      if (ta) {
-        ta.value = promptText;
-        autogrow();
-        ta.focus();
-        toast("Prompt pasted into the chat! ✨", "ok");
-      }
-    },
-    onQueuePrompt: (promptText) => {
-      queuePrompt(promptText);
-    },
-  });
-  S.downloadHub = downloadHub;
-  downloadHub.setLowFx(S.safeActive);
-
-  // Request persistent storage
-  if (navigator.storage?.persist) {
-    navigator.storage.persist().catch(() => {});
-  }
-
   bindUI();
   setStatus("idle", "preparing…");
   updateModelChip();
   updateOnlineUI();
-  await refreshThreads();
+  setupCrashGuard();
+  setupIdleUnloader();
 
-  // Restore the last thread
+  // The shell is interactive from here on. IndexedDB reads, the GPU probe
+  // and the Service Worker come next, while the browser is idle — a slow
+  // phone shows a usable UI immediately instead of a blank frozen one.
+  whenIdle(() => { initHeavy().catch(() => {}); }, 700);
+}
+
+async function initHeavy() {
+  // Persistent storage keeps the model weights from being evicted.
+  if (navigator.storage?.persist) {
+    navigator.storage.persist().catch(() => {});
+  }
+
+  await refreshThreads();
   const lastId = S.settings.lastThreadId;
   if (lastId && S.threads.some((t) => t.id === lastId)) {
     await openThread(lastId, { silent: true });
   }
+  await handleInterruptedGeneration();
 
-  // Hardware probe in the background (never blocks the UI)
-  setStatus("scan");
-  probeHardware()
-    .then((hw) => {
-      S.hw = hw;
-      S.rec = recommendModels(hw, MODEL_CATALOG, WASM_CATALOG);
-      applySafeMode();
-      if (S.safeActive && S.settings.safeMode === "auto") {
-        toast("Safe Mode enabled for your device — visuals simplified to protect the GPU 🛡️", "info", 5000);
-      }
-      $("#hw-hint").textContent =
-        `${deviceSummary(hw)} · budget ~${fmtBytes(S.rec.budgetMB)} · recommended: ${getModel(S.rec.recommended)?.name || "—"}`;
-      if (!S.model) setStatus("idle", "pick a model");
-    })
-    .catch(() => {
-      $("#hw-hint").textContent = "Could not probe the hardware — please pick a model manually.";
-      setStatus("idle");
-    });
-
-  // Restore the previously selected model (but never auto-download!)
-  const savedKey = S.settings.modelKey;
-  if (savedKey && getModel(savedKey)) {
-    S.model = getModel(savedKey);
-    updateModelChip();
-    const wasDownloaded = !!S.settings.downloaded[savedKey];
-    if (wasDownloaded) {
-      // Model is cached → try loading automatically (fast, works offline).
-      loadModel(savedKey, { auto: true }).catch(() => {});
-    } else {
-      setStatus("idle", S.model.name);
+  // Hardware probe (never blocks the UI, but the model picker uses it).
+  if (!S.model) setStatus("scan");
+  try {
+    const hw = await probeHardware();
+    S.hw = hw;
+    S.rec = recommendModels(hw, MODEL_CATALOG, WASM_CATALOG);
+    S.perf = perfTier(hw);
+    applySafeMode();
+    S.idleWatcher?.refresh();
+    if (S.safeActive && S.settings.safeMode === "auto") {
+      toast("Safe Mode enabled for your device — visuals simplified to protect the GPU 🛡️", "info", 5000);
     }
-  } else if (!S.settings.onboarded) {
-    // First launch → onboarding once the hardware is known.
-    const waitHw = setInterval(() => {
-      if (S.hw) {
-        clearInterval(waitHw);
-        openOnboarding();
-      }
-    }, 250);
-    setTimeout(() => clearInterval(waitHw), 8000);
-    setTimeout(() => {
-      if (!S.hw && !S.settings.onboarded) openOnboarding();
-    }, 8200);
+    $("#hw-hint").textContent =
+      `${deviceSummary(hw)} · budget ~${fmtBytes(S.rec.budgetMB)} · recommended: ${getModel(S.rec.recommended)?.name || "—"}`;
+  } catch {
+    $("#hw-hint").textContent = "Could not probe the hardware — please pick a model manually.";
   }
 
+  restoreSavedModel();
   handleLaunchParams();
   registerSW();
   refreshStorageBar().catch(() => {});
+  prefetchDownloadHub();
+  if (!S.model) setStatus("idle", S.hw ? "pick a model" : "");
+}
+
+/**
+ * Bring back the model the user picked last time. Auto-warming is skipped
+ * on weak devices: loading hundreds of MB into a phone's memory during
+ * startup is exactly how tabs get killed by the OS. There the model loads
+ * on the first message instead (same speed, better timing).
+ */
+function restoreSavedModel() {
+  const savedKey = S.settings.modelKey;
+  const model = savedKey ? getModel(savedKey) : null;
+  if (model) {
+    S.model = model;
+    updateModelChip();
+    const cached = !!S.settings.downloaded[savedKey];
+    if (!cached) {
+      setStatus("idle", model.name);
+      return;
+    }
+    if (S.perf === "low") {
+      setStatus("idle", `${model.name} · loads on the first message`);
+      return;
+    }
+    loadModel(savedKey, { auto: true }).catch(() => {});
+    return;
+  }
+  if (!S.settings.onboarded) {
+    if (S.hw) openOnboarding();
+    else setTimeout(() => { if (!S.settings.onboarded) openOnboarding(); }, 1200);
+  }
+}
+
+// ── Crash guard / recovery ────────────────────────────────────
+/**
+ * A crash (OOM, GPU device lost, the OS killing the tab) must never
+ * lose work: the unsent draft is mirrored to localStorage and a marker
+ * tells the next launch that an answer was cut mid-flight.
+ */
+function setupCrashGuard() {
+  const draft = Draft.read();
+  const ta = $("#input");
+  if (draft?.text && ta && !ta.value) {
+    ta.value = draft.text;
+    autogrow();
+    $("#btn-send").classList.add("ready");
+    toast("Your unsent message was restored 💾", "info", 4000);
+  }
+  S.crashRecovery = BusyMark.read();
+  if (S.crashRecovery) BusyMark.clear();
+
+  window.addEventListener("pagehide", () => {
+    // While a generation is running the marker stays — the answer really
+    // is unfinished; otherwise keep the draft and clear the marker.
+    if (!S.generating) {
+      BusyMark.clear();
+      Draft.save(S.activeId, ta?.value || "");
+    }
+  });
+}
+
+/** Close a partial answer from a previous session so it can be continued. */
+async function handleInterruptedGeneration() {
+  const busy = S.crashRecovery;
+  S.crashRecovery = null;
+  if (!busy?.threadId) return;
+  const list = await getMessages(busy.threadId, { refresh: true });
+  const last = [...list].reverse().find(
+    (m) => m.role === "assistant" && isInterruptedMessage(m.stats)
+  );
+  if (!last) return;
+  const stats = closedPartialStats(last.stats);
+  await Messages.update(last.id, { stats }).catch(() => {});
+  cachePatch(busy.threadId, last.id, { stats });
+  if (S.activeId === busy.threadId) await renderThread(true);
+  toast("The last answer was interrupted (the page closed or ran out of memory) — press ▶️ on it to continue where it stopped.", "warn", 9000);
+}
+
+// ── Idle unload (the main protection against OOM kills on phones) ──
+function idleTimeoutMs() {
+  const pref = S.settings.idleUnload || "auto";
+  if (pref === "off") return 0;
+  const fixed = IDLE_UNLOAD_MS.fixed[pref];
+  if (fixed) return fixed;
+  return S.perf === "low" ? IDLE_UNLOAD_MS.autoWeak : IDLE_UNLOAD_MS.autoStrong;
+}
+
+function setupIdleUnloader() {
+  S.idleWatcher = new IdleUnloader({
+    getTimeoutMs: idleTimeoutMs,
+    isBusy: () => S.generating || S.downloading,
+    onIdle: releaseIdleModel,
+  });
+}
+
+/**
+ * Note "the user is here" (throttled — this also runs on every keystroke).
+ * A forced touch always reschedules: the idle timer is skipped entirely
+ * while a model is loading or answering, so it must be restarted when the
+ * work finishes (`force`).
+ */
+function touchActivity(force = false) {
+  const now = Date.now();
+  if (!force && now - S.lastIdleTouch < 5000) return;
+  S.lastIdleTouch = now;
+  S.idleWatcher?.touch();
+}
+
+function releaseIdleModel() {
+  if (!S.engineLoaded || S.generating || S.downloading) return;
+  S.proxy.unload().catch(() => {});
+  S.engineLoaded = false;
+  S.engineModelKey = null;
+  setStatus("idle", S.model ? `${S.model.name} · free, loads on demand` : "");
+  toast("Model released from memory to keep the device healthy — it will load again in a few seconds when you send. 🧠", "info", 6000);
+}
+
+/**
+ * Android/iOS quietly kill backgrounded tabs. When we come back, verify
+ * the engine is still there and reload it from the local cache if not,
+ * instead of failing the user's next message.
+ */
+async function wakeUpChecks() {
+  touchActivity();
+  // Never probe while the engine is working: on a slow CPU a token can keep
+  // the worker busy for seconds and we must not mistake that for death.
+  if (S.generating || S.downloading) return;
+  if (!S.engineLoaded || !S.engineModelKey) return;
+  const timeout = idleTimeoutMs();
+  const away = S.hiddenAt ? Date.now() - S.hiddenAt : 0;
+  S.hiddenAt = 0;
+  if (timeout > 0 && away >= timeout) {
+    releaseIdleModel();
+    return;
+  }
+  const st = await S.proxy.health();
+  if (st?.loaded) return;
+  const key = S.engineModelKey;
+  S.engineLoaded = false;
+  S.engineModelKey = null;
+  if (key && getModel(key)) {
+    toast("Reconnecting the AI engine after background time…", "info", 4000);
+    loadModel(key, { auto: true }).catch(() => {});
+  }
 }
 
 function bindUI() {
   $("#btn-send").addEventListener("click", () => onSend());
   $("#btn-stop").addEventListener("click", stopGeneration);
   const input = $("#input");
+  let draftTimer = null;
   input.addEventListener("input", () => {
     autogrow();
-    updateCharCount();
     // Glow the send button while there is something to send.
     $("#btn-send").classList.toggle("ready", input.value.trim().length > 0);
+    touchActivity();
+    // Crash guard: mirror the draft (debounced — localStorage is slow).
+    if (draftTimer) clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => Draft.save(S.activeId, input.value), LIMITS.draftSaveMs);
   });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && S.settings.sendOnEnter) {
@@ -340,11 +557,14 @@ function bindUI() {
   window.addEventListener("error", (e) => reportGlitch(e.error || e.message));
   window.addEventListener("unhandledrejection", (e) => reportGlitch(e.reason));
 
-  // The OS drops the wake lock when hidden — take it back on return.
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && (S.downloading || S.generating)) {
-      holdWakeLock(true);
+    if (document.hidden) {
+      S.hiddenAt = Date.now();
+      return;
     }
+    // The OS drops the wake lock when hidden — take it back on return.
+    if (S.downloading || S.generating) holdWakeLock(true);
+    wakeUpChecks().catch(() => {});
   });
 
   const pill = $("#status-pill");
@@ -359,11 +579,47 @@ function bindUI() {
   });
 }
 
+let autogrowQueued = false;
+let lastGrowProbe = "";
+let lastGrowShort = true;
+
+/**
+ * Grow the composer with its content. Measuring the textarea forces a
+ * layout pass, and this runs on every keystroke — so it is coalesced to
+ * one pass per frame and skipped entirely while the text is a short
+ * single line (the common case while typing).
+ */
 function autogrow() {
   const ta = $("#input");
-  ta.style.height = "auto";
-  ta.style.height = Math.min(ta.scrollHeight, 150) + "px";
+  if (!ta) return;
   updateCharCount();
+  if (autogrowQueued) return;
+  autogrowQueued = true;
+  requestAnimationFrame(() => {
+    autogrowQueued = false;
+    const value = ta.value;
+    const short = value.length < 48 && !value.includes("\n");
+    if (short && lastGrowShort) return; // already one row high
+    lastGrowShort = short;
+    const probe = value + "\n";
+    if (probe === lastGrowProbe) return;
+    lastGrowProbe = probe;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 150) + "px";
+  });
+}
+
+/** Empty the composer (and its crash-guard draft) in one place. */
+function clearInput() {
+  const ta = $("#input");
+  if (!ta) return;
+  ta.value = "";
+  ta.style.height = "auto";
+  lastGrowProbe = "";
+  lastGrowShort = true;
+  updateCharCount();
+  $("#btn-send").classList.remove("ready");
+  Draft.clear();
 }
 
 function updateOnlineUI() {
@@ -383,17 +639,25 @@ function closeDrawer() {
   setTimeout(() => { $("#scrim").hidden = true; }, 300);
 }
 
-async function refreshThreads() {
+async function refreshThreads(force = false) {
   S.threads = await Threads.list().catch(() => []);
-  renderThreadList();
+  renderThreadList(force);
 }
 
-function renderThreadList() {
+let threadListSig = "";
+
+function renderThreadList(force = false) {
   const list = $("#thread-list");
-  list.innerHTML = "";
   const items = S.threads
     .filter((t) => !S.threadFilter || t.title.toLowerCase().includes(S.threadFilter))
     .sort((a, b) => (b.pinned - a.pinned) || (b.updatedAt - a.updatedAt));
+  // Rebuilding this list destroys and recreates every row (listeners too).
+  // It is refreshed after every answer, so skip it when nothing changed.
+  const sig = `${S.activeId}|${S.threadFilter}|` +
+    items.map((t) => `${t.id}:${t.updatedAt}:${t.pinned ? 1 : 0}:${t.title}`).join(",");
+  if (!force && sig === threadListSig) return;
+  threadListSig = sig;
+  list.innerHTML = "";
   if (!items.length) {
     list.appendChild(el(`<div class="empty-threads">No chats yet.<br>Create one to get started. ✨</div>`));
     return;
@@ -435,6 +699,7 @@ async function threadAction(id, act) {
     });
     if (!ok) return;
     await Threads.remove(id);
+    S.msgCache.delete(id);
     if (S.activeId === id) {
       S.activeId = null;
       $("#messages").innerHTML = "";
@@ -468,6 +733,7 @@ async function newChat() {
   S.settings = saveSettings({ lastThreadId: null });
   $("#messages").innerHTML = "";
   $("#load-more-wrap").hidden = true;
+  Draft.clear();
   updateWelcome();
   updateCtxInfo([]);
   await refreshThreads();
@@ -536,6 +802,60 @@ function statsLine(stats) {
   return parts.join(" · ");
 }
 
+/** Body HTML of a message (user text is escaped, answers are Markdown). */
+function messageHTML(role, content) {
+  const text = String(content ?? "");
+  if (role === "user") return escapeHtml(text).replace(/\n/g, "<br>");
+  return renderMarkdown(text);
+}
+
+/**
+ * Fill a bubble. Very long messages are cut for the first paint (a 50k
+ * character answer would freeze a weak phone) and can be shown in full
+ * with one tap — the text itself is never lost.
+ */
+function fillBubbleContent(node, role, content) {
+  const raw = String(content ?? "");
+  const cap = LIMITS.maxRenderChars;
+  const long = raw.length > cap;
+  const shown = long ? raw.slice(0, cap) : raw;
+  node.querySelector(".content").innerHTML = messageHTML(role, shown);
+  node.dataset.raw = shown;
+  if (long) node.dataset.long = "1";
+  else delete node.dataset.long;
+  const bubble = node.querySelector(".bubble");
+  bubble.querySelector(".msg-truncated")?.remove();
+  if (long) {
+    bubble.appendChild(el(
+      `<div class="msg-truncated"><span>Trimmed for speed · ${Math.round(raw.length / 1000)}k chars</span>` +
+      `<button class="btn ghost xs" data-act="expand">Show all</button></div>`
+    ));
+  }
+  return long;
+}
+
+/** Add a "continue this answer" button to an existing bubble. */
+function addContinueButton(node, mid) {
+  const foot = node?.querySelector(".msg-foot");
+  if (!mid || !foot || foot.querySelector('[data-act="continue"]')) return;
+  node.dataset.mid = mid;
+  const btn = el(
+    `<button class="icon-btn accent" data-act="continue" title="Continue this answer"><svg><use href="#i-play"/></svg></button>`
+  );
+  foot.insertBefore(btn, foot.querySelector("time") || foot.querySelector("small") || null);
+}
+
+/** Full text of a message, from the DOM or from the message cache. */
+function rawOf(node) {
+  if (!node) return "";
+  if (node.dataset.long) {
+    const id = node.dataset.mid;
+    const cached = id ? S.msgCache.get(S.activeId)?.find((m) => m.id === id) : null;
+    if (cached) return cached.content || "";
+  }
+  return node.dataset.raw || node.querySelector(".content")?.textContent || "";
+}
+
 async function renderThread(resetWindow) {
   const box = $("#messages");
   box.innerHTML = "";
@@ -544,18 +864,19 @@ async function renderThread(resetWindow) {
     updateWelcome();
     return;
   }
-  const all = await Messages.list(S.activeId, 1000);
+  const all = await getMessages(S.activeId);
   const total = all.length;
   const windowSize = resetWindow ? renderWindowSize() : total;
   const slice = all.slice(-windowSize);
   $("#load-more-wrap").hidden = total <= slice.length;
   for (const m of slice) {
-    const html = m.role === "user"
-      ? escapeHtml(m.content).replace(/\n/g, "<br>")
-      : renderMarkdown(m.content);
-    const node = msgNode(m.role, html, statsLine(m.stats), { ts: m.ts, cutOff: !!m.stats?.cutOff });
+    const interrupted = isInterruptedMessage(m.stats);
+    const node = msgNode(m.role, "", statsLine(m.stats), {
+      ts: m.ts,
+      cutOff: !!m.stats?.cutOff || interrupted,
+    });
     node.dataset.mid = m.id;
-    node.dataset.raw = m.content;
+    fillBubbleContent(node, m.role, m.content);
     box.appendChild(node);
   }
   updateWelcome();
@@ -576,10 +897,26 @@ function onMessagesClick(e) {
       .then((ok) => toast(ok ? "Code copied" : "Could not copy", ok ? "ok" : "error"));
     return;
   }
+  const expandBtn = e.target.closest('[data-act="expand"]');
+  if (expandBtn) {
+    const msgEl = expandBtn.closest(".msg");
+    if (msgEl) {
+      const full = rawOf(msgEl);
+      const role = msgEl.classList.contains("user") ? "user" : "assistant";
+      delete msgEl.dataset.long;
+      msgEl.querySelector(".msg-truncated")?.remove();
+      msgEl.dataset.raw = full;
+      msgEl.querySelector(".content").innerHTML = messageHTML(role, full);
+      if (full.length > 60000) {
+        toast("This message is extremely long — the page may slow down for a moment.", "warn", 5000);
+      }
+    }
+    return;
+  }
   const btn = e.target.closest(".msg-foot button");
   if (!btn) return;
   const msgEl = e.target.closest(".msg");
-  const raw = msgEl?.dataset.raw || msgEl?.querySelector(".content")?.textContent || "";
+  const raw = rawOf(msgEl);
   if (btn.dataset.act === "copy") {
     copyText(raw).then((ok) => toast(ok ? "Copied" : "Could not copy", ok ? "ok" : "error"));
   } else if (btn.dataset.act === "regen") {
@@ -596,11 +933,7 @@ async function queuePrompt(text) {
     toast("Pick an AI model first", "warn");
     return;
   }
-  const ta = $("#input");
-  if (ta) {
-    ta.value = "";
-    autogrow();
-  }
+  clearInput();
 
   // Make sure we have a working thread
   if (!S.activeId) {
@@ -622,6 +955,7 @@ async function queuePrompt(text) {
   }
 
   const userMsg = await Messages.add(S.activeId, { role: "user", content: text });
+  cacheAdd(S.activeId, userMsg);
   const box = $("#messages");
   const uNode = msgNode("user", escapeHtml(text).replace(/\n/g, "<br>"), "", { ts: userMsg.ts });
   uNode.dataset.mid = userMsg.id;
@@ -677,9 +1011,8 @@ async function onSend() {
 
   if (!(await ensureEngine())) return;
 
-  ta.value = "";
-  autogrow();
-  $("#btn-send").classList.remove("ready");
+  clearInput();
+  touchActivity();
 
   // Working thread
   if (!S.activeId) {
@@ -699,6 +1032,7 @@ async function onSend() {
   }
 
   const userMsg = await Messages.add(S.activeId, { role: "user", content: text });
+  cacheAdd(S.activeId, userMsg);
   const box = $("#messages");
   const uNode = msgNode("user", escapeHtml(text).replace(/\n/g, "<br>"), "", { ts: userMsg.ts });
   uNode.dataset.mid = userMsg.id;
@@ -710,6 +1044,25 @@ async function onSend() {
   await generateReply();
 }
 
+/**
+ * The fastest stable model that is clearly smaller than the current one —
+ * used to nudge the user when their device is crawling.
+ */
+function fasterAlternative(model) {
+  const pool = (model.engine === "webllm" ? MODEL_CATALOG : WASM_CATALOG)
+    .filter((m) => m.key !== model.key && m.stable !== false && m.sizeMB < model.sizeMB);
+  if (!pool.length) return null;
+  pool.sort((a, b) => (b.tps?.[1] || 0) - (a.tps?.[1] || 0));
+  const best = pool[0];
+  return (best.tps?.[1] || 0) > (model.tps?.[1] || 0) ? best : null;
+}
+
+/** Keep one oversized message from eating the whole context window. */
+function tailChars(text, maxChars) {
+  if (text.length <= maxChars) return text;
+  return "…" + text.slice(text.length - maxChars + 1);
+}
+
 function historyForChat(allMessages, ctxTokens) {
   const sys = { role: "system", content: S.settings.systemPrompt };
   const budget = Math.max(512, ctxTokens - S.settings.maxTokens - 128);
@@ -718,24 +1071,38 @@ function historyForChat(allMessages, ctxTokens) {
   for (let i = allMessages.length - 1; i >= 0; i--) {
     const m = allMessages[i];
     if (m.role !== "user" && m.role !== "assistant") continue;
-    const cost = estimateTokens(m.content) + 8;
-    if (used + cost > budget && picked.length > 0) break;
+    let content = m.content;
+    let cost = estimateTokens(content) + 8;
+    if (used + cost > budget) {
+      const left = budget - used;
+      // A single huge message (a pasted document, a long answer) must not
+      // be dropped entirely — keep its tail, which is the relevant part.
+      if (!picked.length && left > 200) {
+        content = tailChars(content, left * 4);
+        cost = estimateTokens(content) + 8;
+      } else {
+        break;
+      }
+    }
     used += cost;
-    picked.unshift({ role: m.role, content: m.content });
+    picked.unshift({ role: m.role, content });
   }
   return [sys, ...picked];
 }
 
 async function generateReply(opts = {}) {
   const box = $("#messages");
-  const cont = opts.continuationOf || null; // { mid, baseText, node } — append into an existing bubble
+  const cont = opts.continuationOf || null; // { mid, baseText, node }
   S.generating = true;
   S.streamText = cont?.baseText || "";
+  touchActivity();
   $("#btn-send").disabled = true;
   $("#btn-stop").hidden = false;
   $("#progress-line").hidden = false;
-  // Pause background animation while the GPU is busy with inference.
+  // Pause background animation while the GPU is busy with inference and
+  // tell assistive tech to stay quiet until the answer is complete.
   document.body.classList.add("generating");
+  box.setAttribute("aria-busy", "true");
   holdWakeLock(true);
 
   // Streaming bubble (fresh, or the existing one when continuing)
@@ -746,23 +1113,70 @@ async function generateReply(opts = {}) {
   }
   const content = node.querySelector(".content");
   node.querySelector('[data-act="continue"]')?.remove();
+  content.innerHTML = "";
+
+  // Incremental renderer: finished blocks are appended once, only the tail
+  // is re-rendered — the answer can be long without slowing the device down.
+  const renderer = new StreamRenderer(content, {
+    caret: true,
+    lowFx: S.perf === "low" || S.safeActive,
+    placeholder: `<span class="typing"><i></i><i></i><i></i></span>`,
+  });
+
+  const t0 = performance.now();
+  let lastStatsPaint = 0;
+  let scrollQueued = false;
+  const paintStats = () => {
+    const now = performance.now();
+    if (now - lastStatsPaint < 250) return;
+    lastStatsPaint = now;
+    const secs = Math.max(0.1, (now - t0) / 1000);
+    const toks = Math.ceil(S.streamText.length / 4);
+    $("#gen-stats").textContent = `${toks} tok · ${(toks / secs).toFixed(1)} tok/s`;
+  };
+  const keepAtBottom = () => {
+    if (!S.nearBottom || scrollQueued) return;
+    scrollQueued = true;
+    requestAnimationFrame(() => {
+      scrollQueued = false;
+      if (S.nearBottom) box.scrollTop = box.scrollHeight;
+    });
+  };
+  renderer.onPaint = () => { paintStats(); keepAtBottom(); };
+  renderer.setText(S.streamText, { force: true });
   scrollBottom(true);
 
-  let renderedAt = 0;
-  const paint = (final = false) => {
-    const now = performance.now();
-    if (!final && now - renderedAt < 90) return;
-    renderedAt = now;
-    content.innerHTML = S.streamText
-      ? renderMarkdown(S.streamText) + (final ? "" : `<span class="caret"></span>`)
-      : `<span class="typing"><i></i><i></i><i></i></span>`;
-    if (S.nearBottom) box.scrollTop = box.scrollHeight;
+  // Crash safety: the partial answer is written to IndexedDB while it
+  // streams, so a crash leaves a message that can be continued instead of
+  // nothing at all.
+  let mid = cont?.mid || null;
+  let lastSavedLen = -1;
+  let lastSaveAt = 0;
+  const savePartial = async (force = false) => {
+    if (!S.activeId || !S.streamText) return;
+    const now = Date.now();
+    if (!force && now - lastSaveAt < LIMITS.partialSaveMs) return;
+    lastSaveAt = now;
+    lastSavedLen = S.streamText.length;
+    const stats = {
+      streaming: true,
+      completionTokens: Math.ceil(S.streamText.length / 4),
+    };
+    if (mid) {
+      await Messages.update(mid, { content: S.streamText, stats }).catch(() => {});
+      cachePatch(S.activeId, mid, { content: S.streamText, stats });
+    } else {
+      const saved = await Messages.add(S.activeId, { role: "assistant", content: S.streamText, stats })
+        .catch(() => null);
+      if (saved) {
+        mid = saved.id;
+        cacheAdd(S.activeId, saved);
+      }
+    }
   };
 
-  paint(true); // with continuation, show the base text immediately
-
   try {
-    const all = await Messages.list(S.activeId, 1000);
+    const all = await getMessages(S.activeId);
     const ctx = S.model.ctx || 4096;
     const history = historyForChat(all, ctx);
     if (cont) {
@@ -771,25 +1185,29 @@ async function generateReply(opts = {}) {
     }
     updateCtxInfo(all);
     setStatus("generating", S.model.name);
+    BusyMark.set({ threadId: S.activeId, modelKey: S.model?.key || null });
 
-    const t0 = performance.now();
     const res = await S.proxy.chat(history, {
       temperature: S.settings.temperature,
       maxTokens: S.settings.maxTokens,
       topP: S.settings.topP,
       onToken: (delta) => {
         S.streamText += delta;
-        // live counter
-        const secs = (performance.now() - t0) / 1000;
-        const toks = Math.ceil(S.streamText.length / 4);
-        $("#gen-stats").textContent = `${toks} tok · ${(toks / Math.max(secs, 0.1)).toFixed(1)} tok/s`;
-        paint(false);
+        renderer.setText(S.streamText);
+        if (S.streamText.length - lastSavedLen > 160) savePartial().catch(() => {});
+      },
+      // The engine died mid-answer and is being rebuilt: start the bubble
+      // over so the new answer is not appended to a dead fragment.
+      onRestart: () => {
+        S.streamText = cont?.baseText || "";
+        lastSavedLen = -1;
+        renderer.reset();
       },
     });
     S.streamText = cont
       ? cont.baseText + (res.text || S.streamText.slice(cont.baseText.length))
       : (res.text || S.streamText);
-    paint(true);
+    renderer.finish(S.streamText);
 
     // Cut off at the token limit? (exact signal on WebLLM, estimate on WASM)
     const legTokens = res.completionTokens || Math.ceil((res.text || "").length / 4);
@@ -800,38 +1218,83 @@ async function generateReply(opts = {}) {
       ttftMs: res.ttftMs || null,
       cutOff,
     };
-    let mid;
-    if (cont) {
-      await Messages.update(cont.mid, { content: S.streamText, stats });
-      mid = cont.mid;
+    if (mid) {
+      await Messages.update(mid, { content: S.streamText, stats }).catch(() => {});
+      cachePatch(S.activeId, mid, { content: S.streamText, stats });
     } else {
-      const saved = await Messages.add(S.activeId, {
-        role: "assistant", content: S.streamText, stats,
-      });
-      mid = saved.id;
+      const saved = await Messages.add(S.activeId, { role: "assistant", content: S.streamText, stats })
+        .catch(() => null);
+      if (saved) {
+        mid = saved.id;
+        cacheAdd(S.activeId, saved);
+      }
     }
-    // Swap in a finished bubble: timestamp, stats, and a Continue button when cut off.
-    const finalNode = msgNode("assistant", content.innerHTML, statsLine(stats), { ts: Date.now(), cutOff });
-    finalNode.dataset.mid = mid;
-    finalNode.dataset.raw = S.streamText;
+    BusyMark.clear();
+
+    // Swap in a finished bubble. The already-rendered DOM is moved over
+    // (no second Markdown pass) unless the answer needs trimming.
+    const finalNode = msgNode("assistant", "", statsLine(stats), { ts: Date.now(), cutOff });
+    finalNode.dataset.mid = mid || "";
+    if (S.streamText.length <= LIMITS.maxRenderChars) {
+      finalNode.querySelector(".content").append(...content.childNodes);
+      finalNode.dataset.raw = S.streamText;
+    } else {
+      fillBubbleContent(finalNode, "assistant", S.streamText);
+    }
+    if (!S.streamText.trim()) {
+      // Some tiny models answer with nothing at all — say so instead of
+      // leaving the user with an empty bubble.
+      finalNode.querySelector(".content").innerHTML =
+        `<p class="muted">The model returned an empty answer — try again, ask something shorter, or pick a slightly bigger model.</p>`;
+    }
     node.replaceWith(finalNode);
     node = finalNode;
+    box.setAttribute("aria-busy", "false");
     $("#gen-stats").textContent = res.aborted
       ? `Stopped · ${statsLine(stats)}`
       : cutOff
         ? `Cut off at the token limit — press Continue below`
         : `Done in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${statsLine(stats)}`;
 
-    const fresh = await Messages.list(S.activeId, 1000);
-    updateCtxInfo(fresh);
+    updateCtxInfo(S.msgCache.get(S.activeId) || []);
     await refreshThreads();
     setStatus("ready", S.model.name + (navigator.onLine ? "" : " · offline"));
+
+    // Very slow generation? Suggest a lighter model — once per session.
+    if (!res.aborted && res.tokPerSec && res.tokPerSec < 3 && !S.slowHintShown && S.model) {
+      const faster = fasterAlternative(S.model);
+      if (faster) {
+        S.slowHintShown = true;
+        setTimeout(() => {
+          toast(`That answer ran at ~${res.tokPerSec} tok/s — ${faster.name} would feel much snappier on this device.`, "info", 9000);
+        }, 1200);
+      }
+    }
   } catch (e) {
     console.error(e);
-    content.innerHTML = `<p>⚠️ <strong>Could not generate an answer.</strong></p><p class="muted">${escapeHtml(friendlyError(e))}</p>`;
+    if (mid) {
+      const stats = closedPartialStats(null);
+      Messages.update(mid, { content: S.streamText, stats }).catch(() => {});
+      cachePatch(S.activeId, mid, { content: S.streamText, stats });
+    }
+    renderer.cancel();
+    if (S.streamText) {
+      // Keep whatever the model already wrote — never throw away a partial
+      // answer — and offer to continue instead of starting over.
+      content.appendChild(el(
+        `<p class="gen-error muted">⚠️ <strong>Generation stopped:</strong> ${escapeHtml(friendlyError(e))}</p>`
+      ));
+      node.dataset.raw = S.streamText;
+      addContinueButton(node, mid);
+    } else {
+      content.innerHTML = `<p>⚠️ <strong>Could not generate an answer.</strong></p><p class="muted">${escapeHtml(friendlyError(e))}</p>`;
+    }
+    box.setAttribute("aria-busy", "false");
     setStatus("error", "generation failed");
     toast(friendlyError(e), "error", 5000);
     if (isGpuError(e)) {
+      S.engineLoaded = false;
+      S.engineModelKey = null;
       offerGpuRecovery();
     } else {
       setTimeout(() => {
@@ -840,11 +1303,14 @@ async function generateReply(opts = {}) {
     }
   } finally {
     S.generating = false;
+    BusyMark.clear();
     holdWakeLock(false);
     document.body.classList.remove("generating");
+    box.setAttribute("aria-busy", "false");
     $("#btn-send").disabled = false;
     $("#btn-stop").hidden = true;
     $("#progress-line").hidden = true;
+    touchActivity(true);
     if (S.nearBottom) scrollBottom(true);
   }
 }
@@ -863,6 +1329,15 @@ async function regenerate() {
     toast("Nothing to regenerate", "warn");
     return;
   }
+  const list = S.msgCache.get(S.activeId);
+  if (list) {
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].role === "assistant") {
+        list.splice(i, 1);
+        break;
+      }
+    }
+  }
   await renderThread(false);
   await generateReply();
 }
@@ -871,7 +1346,7 @@ async function continueReply(mid) {
   if (S.generating || !S.activeId) return;
   if (!(await ensureEngine())) return;
   const node = mid && $("#messages").querySelector(`.msg[data-mid="${mid}"]`);
-  const baseText = node?.dataset.raw;
+  const baseText = node ? rawOf(node) : "";
   if (!node || !baseText) {
     toast("Could not find that message — try Regenerate", "warn");
     return;
@@ -885,8 +1360,105 @@ function isGpuError(e) {
   return /device lost|lost device|out of memory|OOM|allocation failed|failed to allocate|webgpu/i.test(m);
 }
 
+/** Host of a URL, for compact error messages. */
+function shortHost(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * A model whose repository could not be verified (missing, renamed or
+ * private). Hugging Face answers 401 for those, so this carries the
+ * reason down to `friendlyError` instead of a cryptic library string.
+ */
+function modelCheckError(model, check) {
+  const e = new Error(
+    `MODEL_UNAVAILABLE: ${model.modelId} (${check.code}${check.status ? ` · HTTP ${check.status}` : ""})`
+  );
+  e.code = check.code;
+  e.status = check.status ?? null;
+  e.modelKey = model.key;
+  e.tried = check.tried || [];
+  return e;
+}
+
+/**
+ * 🐢 Potato mode — one click for very weak / very old phones:
+ * lightest model, tiny context, no blur, no animations, quick unload.
+ */
+function applyPotatoMode() {
+  S.settings = saveSettings(potatoProfile());
+  // Pick the lightest model that still fits — and swap out a heavy one,
+  // otherwise "potato mode" would only change the colours.
+  const pool = (S.hw?.webgpu?.supported === false ? WASM_CATALOG : MODEL_CATALOG)
+    .filter((m) => m.stable);
+  const lightest = pool.slice().sort((a, b) => (a.vramMB || 0) - (b.vramMB || 0))[0];
+  const current = S.settings.modelKey ? getModel(S.settings.modelKey) : null;
+  const tooHeavy = current && (current.tier === "pro" || current.tier === "max" || current.vramMB > 1600);
+  if (lightest && (!current || tooHeavy)) {
+    S.settings = saveSettings({ modelKey: lightest.key });
+    S.potatoModelName = lightest.name;
+  }
+  applyAppearance();
+  applyAnims();
+  applySafeMode();
+  S.idleWatcher?.refresh?.();
+}
+
+/** Offer Potato mode once, when the device really looks like a potato. */
+async function maybeSuggestPotato() {
+  if (S.settings.potato || S.settings.potatoAsked) return;
+  if (!shouldSuggestPotato(S.hw)) return;
+  S.settings = saveSettings({ potatoAsked: true });
+  const ok = await confirmDialog({
+    title: "🐢 Potato mode?",
+    text: "This device looks light (little RAM, few cores or no WebGPU). Potato mode picks the smallest model, "
+      + "shrinks the context window and turns off blur/animations so OffChat stays responsive instead of crashing.",
+    okLabel: "Enable potato mode",
+  });
+  if (ok) {
+    applyPotatoMode();
+    toast("Potato mode on 🐢 — lightest model, tiny context, no effects", "ok", 6000);
+  }
+}
+
 function friendlyError(e) {
   const m = String(e?.message || e || "");
+  // Prefer the machine-readable diagnosis attached by the engine /
+  // model preflight; fall back to reading the raw message.
+  const info = e?.code
+    ? { code: e.code, status: e.status ?? null, url: e.url || null }
+    : classifyError(e);
+  const where = info.url ? ` (${shortHost(info.url)})` : "";
+
+  // The classic one: HTTP 401 from the Hub means the repository is
+  // missing, renamed or private — NOT that the user did something wrong.
+  if (info.code === "unauthorized") {
+    return "That model could not be found on Hugging Face (it was renamed, removed or is private) — the Hub answers "
+      + "such requests with 401 Unauthorized" + where + ". OffChat repairs renamed repositories automatically, "
+      + "so pick another model from the list (SmolLM2 and Gemma 3 270M are verified to work).";
+  }
+  if (info.code === "forbidden") {
+    return "Hugging Face refused this file (HTTP 403 — the model is gated or the download limit was hit" + where + "). "
+      + "Gated models need an account, which a browser-only app cannot use — choose an open model instead.";
+  }
+  if (info.code === "missing-file") {
+    return "This model does not publish the requested variant on Hugging Face" + where + ". "
+      + "Pick the model again — OffChat will fall back to another quantisation automatically.";
+  }
+  if (info.code === "server") {
+    return "Hugging Face had a server hiccup (HTTP 5xx" + where + "). Wait a moment and retry — the download resumes from the cache.";
+  }
+  if (info.code === "storage") {
+    return "Not enough storage for this model. Free some space (Settings → Clear model cache) or pick a smaller model.";
+  }
+  if (info.code === "offline") {
+    return "You are offline — connect to the internet and retry. Models already downloaded keep working offline.";
+  }
+
   if (/device lost|lost device/i.test(m)) {
     return "The GPU crashed (device lost) — the model was unloaded to protect the page. Enable Safe Mode and try a smaller model or the CPU mode.";
   }
@@ -897,10 +1469,11 @@ function friendlyError(e) {
     return "WebGPU trouble — reload the page or pick the compatibility (WASM) mode.";
   }
   if (/network|fetch|Failed to fetch|Load failed|resolve module|CORS|networkerror/i.test(m)) {
-    return "Network trouble — the model or the engine library could not be downloaded. Check your connection (or blocking extensions) and retry.";
+    return "Network trouble — the model or the engine library could not be downloaded. Check your connection (or blocking extensions) and retry. "
+      + "If the model was downloaded before, the browser may have cleared its cache — pick it again to re-download.";
   }
   if (/MODEL_NOT_FOUND/i.test(m)) return m.replace("MODEL_NOT_FOUND: ", "");
-  if (/engine is not loaded/i.test(m)) {
+  if (/engine is not loaded|lost its model|not loaded/i.test(m)) {
     return "The engine lost its model (e.g. after a GPU crash) — open the list and pick a model again.";
   }
   if (/context|Conversation exceeded/i.test(m)) {
@@ -963,8 +1536,40 @@ function updateCtxInfo(allMessages) {
 }
 
 // ── Engine: ensure / load ─────────────────────────────────────
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Errors worth retrying (the download was interrupted, not the model). */
+function isTransientError(e) {
+  const m = String(e?.message || e || "");
+  return /network|fetch|failed to fetch|load failed|timeout|timed out|net::|connection|resolve module|err_|socket|aborted/i.test(m)
+    && !isGpuError(e);
+}
+
+/** One blind retry covers the common "Wi-Fi blinked during a download". */
+async function withRetry(fn, { retries = 1 } = {}) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (attempt === retries || !isTransientError(e) || !navigator.onLine) throw e;
+      toast("The connection dropped — resuming the download… 🔄", "warn", 4000);
+      await sleep(1500 * (attempt + 1));
+    }
+  }
+  throw lastErr;
+}
+
 async function ensureEngine() {
-  if (S.engineLoaded) return true;
+  if (S.engineLoaded && S.engineModelKey) {
+    // Cheap liveness check: the engine can die silently (a GPU crash or the
+    // browser killing the worker) while the UI still claims "Ready".
+    const state = await S.proxy.health().catch(() => null);
+    if (state?.loaded) return true;
+    S.engineLoaded = false;
+    S.engineModelKey = null;
+  }
   if (!S.model) {
     openModelPicker();
     toast("Pick an AI model first", "info");
@@ -976,6 +1581,20 @@ async function ensureEngine() {
   } catch {
     return false;
   }
+}
+
+/** Ask before a download that may not fit in the free storage. */
+async function confirmStorageRoom(model) {
+  const free = S.hw?.storage?.freeMB || 0;
+  if (!free || S.settings.downloaded[model.key]) return true;
+  if (free > model.sizeMB * 1.4) return true;
+  return confirmDialog({
+    title: "Not much free space left",
+    text: `${model.name} needs about ${fmtSizeMB(model.sizeMB)} but only ~${fmtBytes(free)} is free. ` +
+      "The download may fail. Continue anyway?",
+    okLabel: "Continue",
+    danger: true,
+  });
 }
 
 async function loadModel(key, { auto = false } = {}) {
@@ -991,6 +1610,7 @@ async function loadModel(key, { auto = false } = {}) {
   }
   if (S.downloading) {
     toast("A model is already loading…", "info");
+    ensureDownloadHub();
     downloadHub?.expand();
     return;
   }
@@ -998,6 +1618,8 @@ async function loadModel(key, { auto = false } = {}) {
     try { S.hw = await probeHardware(); } catch { /* continue with the fallback */ }
   }
   const hw = S.hw || { mobile: true, ramGB: 4, webgpu: { supported: true, f16: false }, cores: 4 };
+
+  if (!auto && !(await confirmStorageRoom(model))) return;
 
   // Mobile-data warning (only for fresh, large downloads)
   if (!auto && hw.connection?.saveData && !S.settings.downloaded[key] && model.sizeMB > 500) {
@@ -1010,40 +1632,62 @@ async function loadModel(key, { auto = false } = {}) {
   }
 
   S.downloading = true;
+  touchActivity();
   holdWakeLock(true);
   S.model = model;
   S.settings = saveSettings({ modelKey: key });
   updateModelChip();
 
-  downloadHub?.start(model, { auto });
+  // The download hub carries the telemetry, the mini-game and the facts —
+  // it is imported only now, never at boot.
+  const hub = await ensureDownloadHub();
+  hub?.start(model, { auto });
 
   const onProgress = (p) => {
-    downloadHub?.updateProgress(p);
+    hub?.updateProgress(p);
     const percent = Math.round((p.progress || 0) * 100);
     if (p.phase === "download") setStatus("download", `${model.name} · ${percent}%`);
     else if (p.phase === "load") setStatus("load", model.name);
   };
 
   try {
-    if (model.engine === "webllm") {
-      const ctx = suggestContextWindow(hw, model, S.settings.ctxCap, S.safeActive);
-      await S.proxy.loadWebLLM({
-        modelId: model.modelId,
-        cacheBackend: S.settings.cacheBackend || "cache",
-        contextWindow: ctx,
-        hasF16: hw.webgpu?.f16 !== false,
-        onProgress,
-      });
-    } else {
-      const threads = hw.crossIsolated ? Math.min(hw.cores || 4, 4) : 1;
-      await S.proxy.loadTransformers({
-        modelId: model.modelId,
-        dtypes: model.dtypes || ["q4f16", "q4", "q8"],
-        device: "wasm",
-        threads,
-        onProgress,
-      });
-    }
+    await withRetry(async () => {
+      if (model.engine === "webllm") {
+        const ctx = suggestContextWindow(hw, model, S.settings.ctxCap, S.safeActive);
+        await S.proxy.loadWebLLM({
+          modelId: model.modelId,
+          cacheBackend: S.settings.cacheBackend || "cache",
+          contextWindow: ctx,
+          hasF16: hw.webgpu?.f16 !== false,
+          onProgress,
+        });
+      } else {
+        // Verify the repository and the weight variant BEFORE downloading
+        // hundreds of MB. Hugging Face answers 401 for a repo that does not
+        // exist, so a wrong id used to surface as "Unauthorized access to
+        // file" — this catches it (and repairs renamed repos) first.
+        let repo = model.modelId;
+        let dtypes = model.dtypes || ["q8", "q4", "q4f16"];
+        let externalData = 0;
+        if (!S.settings.downloaded[key]) {
+          setStatus("load", `${model.name} · checking…`);
+          const check = await probeWasmModel(model, { force: !auto });
+          if (!check.ok) throw modelCheckError(model, check);
+          repo = check.repo;
+          if (check.dtype) dtypes = [check.dtype, ...dtypes.filter((d) => d !== check.dtype)];
+          externalData = check.data?.length || 0;
+        }
+        const threads = hw.crossIsolated ? Math.min(hw.cores || 4, 4) : 1;
+        await S.proxy.loadTransformers({
+          modelId: repo,
+          dtypes,
+          device: "wasm",
+          threads,
+          externalData,
+          onProgress,
+        });
+      }
+    });
     S.engineLoaded = true;
     S.engineModelKey = key;
     S.settings = saveSettings({
@@ -1059,8 +1703,23 @@ async function loadModel(key, { auto = false } = {}) {
   } catch (e) {
     console.error(e);
     S.engineLoaded = false;
+    S.engineModelKey = null;
     setStatus("error", "loading failed");
+    // Offline and the load still failed → the cached weights are gone
+    // (browsers evict them). Stop claiming the model is available offline.
+    if (isTransientError(e) && !navigator.onLine && S.settings.downloaded[key]) {
+      const next = { ...S.settings.downloaded };
+      delete next[key];
+      S.settings = saveSettings({ downloaded: next });
+    }
     toast(friendlyError(e), "error", 6000);
+    // A model that is gone/renamed/gated: point at one that is verified.
+    if (["unauthorized", "forbidden", "missing-file"].includes(e?.code)) {
+      const alt = (model.engine === "transformers" ? WASM_CATALOG : MODEL_CATALOG)
+        .filter((m) => m.stable && m.key !== model.key)
+        .sort((a, b) => a.sizeMB - b.sizeMB)[0];
+      if (alt) toast(`Try “${alt.name}” instead — it is verified to install. ✔`, "info", 9000);
+    }
     if (isGpuError(e)) {
       // Give the hub a moment to close before showing recovery.
       setTimeout(() => offerGpuRecovery(), 350);
@@ -1069,7 +1728,8 @@ async function loadModel(key, { auto = false } = {}) {
   } finally {
     S.downloading = false;
     holdWakeLock(false);
-    downloadHub?.finish();
+    hub?.finish();
+    touchActivity(true);
   }
 }
 
@@ -1105,7 +1765,7 @@ async function exportThreadMD() {
     return;
   }
   const t = S.threads.find((x) => x.id === S.activeId);
-  const all = await Messages.list(S.activeId, 1000).catch(() => []);
+  const all = await getMessages(S.activeId).catch(() => []);
   if (!all.length) {
     toast("Nothing to export yet", "warn");
     return;
@@ -1322,6 +1982,9 @@ function openModelPicker() {
       </div>`,
   });
 
+  // Weak device? Offer the one-click Potato profile right when it matters.
+  if (!S.settings.potatoAsked) setTimeout(() => maybeSuggestPotato(), 600);
+
   const filterPills = body.querySelectorAll(".filter-pill");
   filterPills.forEach((pill) => {
     pill.addEventListener("click", () => {
@@ -1359,6 +2022,7 @@ function openModelPicker() {
     S.engineModelKey = null;
     setStatus("idle", "model unloaded");
     toast("Model released from memory", "ok");
+    touchActivity();
     close();
   });
   body.addEventListener("click", (e) => {
@@ -1416,6 +2080,11 @@ function openSettings() {
       </select>
       <small class="hint">Smaller context = less GPU memory = fewer crashes. Applies when a model loads.</small></div>
 
+    <div class="set-section">Slow devices</div>
+    <div class="switch-row"><span>🐢 Potato mode<small>One click for very old phones: smallest model, tiny context, no blur, no animations, quick memory release.</small></span>
+      <label class="switch"><input type="checkbox" id="sw-potato" ${s.potato ? "checked" : ""}><i></i></label></div>
+    <div class="row end"><button class="btn ghost sm" id="btn-potato">Apply the potato profile now</button></div>
+
     <div class="set-section">Generation</div>
     <div class="field"><label>Temperature (creativity) <output id="o-temp">${s.temperature.toFixed(2)}</output></label>
       <input type="range" id="r-temp" min="0" max="1.5" step="0.05" value="${s.temperature}"></div>
@@ -1430,6 +2099,17 @@ function openSettings() {
       <label class="switch"><input type="checkbox" id="sw-enter" ${s.sendOnEnter ? "checked" : ""}><i></i></label></div>
 
     <div class="set-section">Memory & offline</div>
+    <div class="field"><label>Release the model from memory when idle</label>
+      <select id="sel-idle">
+        <option value="auto" ${s.idleUnload === "auto" ? "selected" : ""}>Auto (recommended)</option>
+        <option value="5" ${s.idleUnload === "5" ? "selected" : ""}>After 5 minutes</option>
+        <option value="15" ${s.idleUnload === "15" ? "selected" : ""}>After 15 minutes</option>
+        <option value="60" ${s.idleUnload === "60" ? "selected" : ""}>After 1 hour</option>
+        <option value="off" ${s.idleUnload === "off" ? "selected" : ""}>Never</option>
+      </select>
+      <small class="hint">Freeing the model is the best protection against out-of-memory crashes on weak devices.
+        Auto = ${Math.round(IDLE_UNLOAD_MS.autoWeak / 60000)} min on phones, ${Math.round(IDLE_UNLOAD_MS.autoStrong / 60000)} min on computers.
+        Loading again from the local cache takes only a few seconds. Applies immediately.</small></div>
     <div class="field"><label>Model weight storage</label>
       <select id="sel-cache">
         <option value="cache" ${s.cacheBackend === "cache" ? "selected" : ""}>Cache API (recommended, stable)</option>
@@ -1448,7 +2128,9 @@ function openSettings() {
 
     <div class="set-section">About</div>
     <p class="hint">OffChat v${APP_VERSION} · engines: WebLLM (WebGPU) + Transformers.js (WASM) ·
-    100% client-side, zero telemetry. Model weights: Hugging Face (local cache).</p>`,
+    100% client-side, zero telemetry. Model weights: Hugging Face (local cache).</p>
+    <p class="hint">Device profile: <strong>${S.perf}</strong>${S.hw ? ` · ${escapeHtml(deviceSummary(S.hw))}` : ""}
+    ${S.safeActive ? "· Safe Mode active" : ""}</p>`,
   });
 
   const bindSeg = (id, key, after) => {
@@ -1517,8 +2199,29 @@ function openSettings() {
     S.settings = saveSettings({ avatars: e.target.checked });
     applyAppearance();
   });
+  body.querySelector("#sw-potato").addEventListener("change", (e) => {
+    if (e.target.checked) {
+      applyPotatoMode();
+      toast("Potato mode on 🐢 — smallest model, tiny context, no effects", "ok", 6000);
+    } else {
+      S.settings = saveSettings({ potato: false });
+      toast("Potato mode off — full quality restored", "info");
+    }
+  });
+  body.querySelector("#btn-potato").addEventListener("click", () => {
+    applyPotatoMode();
+    body.querySelector("#sw-potato").checked = true;
+    toast("Potato profile applied 🐢", "ok", 5000);
+  });
   body.querySelector("#sw-enter").addEventListener("change", (e) => {
     S.settings = saveSettings({ sendOnEnter: e.target.checked });
+  });
+  body.querySelector("#sel-idle").addEventListener("change", (e) => {
+    S.settings = saveSettings({ idleUnload: e.target.value });
+    S.idleWatcher?.refresh();
+    toast(e.target.value === "off"
+      ? "The model will stay in memory"
+      : "Idle release updated — the model loads again on demand", "info");
   });
   body.querySelector("#sel-ctx").addEventListener("change", (e) => {
     S.settings = saveSettings({ ctxCap: e.target.value });
@@ -1549,6 +2252,7 @@ function openSettings() {
     });
     if (!ok) return;
     await Threads.clearAll();
+    S.msgCache.clear();
     S.activeId = null;
     $("#messages").innerHTML = "";
     updateWelcome();
@@ -1605,7 +2309,8 @@ async function onImportFile(e) {
   try {
     const bundle = JSON.parse(await f.text());
     const n = await importAll(bundle);
-    await refreshThreads();
+    S.msgCache.clear();
+    await refreshThreads(true);
     toast(`Imported ${n} chats`, "ok");
   } catch {
     toast("Invalid export file", "error");

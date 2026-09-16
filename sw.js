@@ -4,8 +4,12 @@
 // (WebLLM / Transformers.js) keep them in their own Cache API stores.
 // Double-caching would waste hundreds of MB on weak phones.
 // ─────────────────────────────────────────────────────────────
-const APP_CACHE = "offchat-shell-v5";
+const APP_CACHE = "offchat-shell-v7";
 const CDN_CACHE = "offchat-cdn-v1";
+// Hub metadata (model preflight) — tiny JSON, cached with a TTL so the
+// model list opens instantly and survives a flaky mobile connection.
+const HFAPI_CACHE = "offchat-hfapi-v1";
+const HFAPI_TTL_MS = 24 * 60 * 60 * 1000;
 
 const SHELL = [
   "./",
@@ -15,6 +19,7 @@ const SHELL = [
   "./css/style.css",
   "./js/app.js",
   "./js/config.js",
+  "./js/model-check.js",
   "./js/download-hub.js",
   "./js/hardware.js",
   "./js/storage.js",
@@ -22,6 +27,8 @@ const SHELL = [
   "./js/engine-proxy.js",
   "./js/llm-worker.js",
   "./js/markdown.js",
+  "./js/stream-render.js",
+  "./js/resilience.js",
   "./js/ui.js",
   "./icons/icon.svg",
   "./icons/icon-192.png",
@@ -41,6 +48,10 @@ const MODEL_HOSTS = [
 const isModelHost = (host) =>
   MODEL_HOSTS.includes(host) || host.endsWith(".hf.co") || host.endsWith(".huggingface.co");
 
+// Hub *metadata* (not weights): repo listings used by the model preflight.
+const isModelApi = (url) =>
+  url.hostname === "huggingface.co" && url.pathname.startsWith("/api/models");
+
 // Engine JS library hosts — cached aggressively (pinned versions).
 const CDN_HOSTS = ["esm.sh", "cdn.jsdelivr.net", "unpkg.com"];
 
@@ -51,7 +62,13 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(APP_CACHE);
-      await cache.addAll(SHELL.map((u) => new Request(u, { cache: "reload" })));
+      // Add file by file: a single missing file (or one flaky request on a
+      // weak connection) must not break the whole offline shell.
+      await Promise.all(
+        SHELL.map((u) =>
+          cache.add(new Request(u, { cache: "reload" })).catch(() => null)
+        )
+      );
       await self.skipWaiting();
     })()
   );
@@ -63,7 +80,7 @@ self.addEventListener("activate", (event) => {
       const names = await caches.keys();
       await Promise.all(
         names.map((n) => {
-          if (n === APP_CACHE || n === CDN_CACHE) return null;
+          if (n === APP_CACHE || n === CDN_CACHE || n === HFAPI_CACHE) return null;
           if (ENGINE_CACHE_RE.test(n)) return null; // model weights — sacred
           if (n.startsWith("offchat-")) return caches.delete(n); // old app versions
           return null;
@@ -89,7 +106,43 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
 
-  // 1) Model weights → straight to the network (the engine has its own cache).
+  // 1a) Hub metadata → short-lived cache (instant preflight, offline-friendly).
+  if (isModelApi(url)) {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(HFAPI_CACHE);
+        // `cache: "no-store"` means the caller wants fresh data (e.g. the
+        // user re-picked a model) — serve it, but do not reuse the copy.
+        const hit = req.cache === "no-store" ? undefined : await cache.match(req);
+        if (hit) {
+          const ts = Number(hit.headers.get("x-offchat-ts") || 0);
+          if (ts && Date.now() - ts < HFAPI_TTL_MS) return hit;
+        }
+        try {
+          const fresh = await fetch(req);
+          if (fresh && fresh.ok) {
+            // Re-stamp the response so we know when it was stored.
+            const body = await fresh.clone().arrayBuffer();
+            const headers = new Headers(fresh.headers);
+            headers.set("x-offchat-ts", String(Date.now()));
+            // Store under a plain request: the caller's `no-store` mode must
+            // not leak into what we keep on disk.
+            cache
+              .put(new Request(req.url), new Response(body, { status: fresh.status, statusText: fresh.statusText, headers }))
+              .then(() => trimCache(HFAPI_CACHE, 80))
+              .catch(() => {});
+            return fresh;
+          }
+          return fresh;
+        } catch {
+          return hit || Response.error();
+        }
+      })()
+    );
+    return;
+  }
+
+  // 1b) Model weights → straight to the network (the engine has its own cache).
   if (isModelHost(url.hostname)) {
     event.respondWith(fetch(req));
     return;

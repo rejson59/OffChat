@@ -1,7 +1,10 @@
 // OffChat · tests/check.mjs — automated quality gate (no dependencies).
 // Run:  node tests/check.mjs
 // Checks: JS syntax · model catalog integrity · no Polish text ·
-//         HTML/JS id wiring · module evaluation smoke test.
+//         HTML/JS id wiring · module evaluation smoke test ·
+//         streaming-renderer equivalence · crash-guard helpers ·
+//         service-worker shell completeness · model preflight (Hub 401) ·
+//         error classification · potato profile.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,6 +16,44 @@ const JS_FILES = fs.readdirSync(path.join(root, "js"))
 const SCAN_EXTS = [".js", ".html", ".css", ".webmanifest", ".md"];
 
 let failures = 0;
+const memStore = {}; // shared localStorage mock (defined once in section 5)
+
+/**
+ * Tiny DOM stand-in for the streaming renderer test: elements hold their
+ * innerHTML as a string, children are appended to it. Enough to verify
+ * what the renderer puts on screen without a browser.
+ */
+function makeMiniDom() {
+  class El {
+    constructor(tag) {
+      this.tagName = tag;
+      this.children = [];
+      this._html = "";
+      this.classList = { add() {}, remove() {}, toggle() {} };
+      this.style = {};
+      this.dataset = {};
+      if (tag === "template") this.content = new El("#fragment");
+    }
+    set innerHTML(v) { this._html = String(v); this.children = []; }
+    get innerHTML() {
+      return this._html + this.children.map((c) => c.innerHTML || "").join("");
+    }
+    append(...nodes) { for (const n of nodes) this.appendChild(n); }
+    appendChild(n) { this.children.push(n); return n; }
+    remove() { this.removed = true; }
+    get isConnected() { return !this.removed; }
+    querySelector() { return null; }
+    setAttribute() {}
+    getAttribute() { return null; }
+    addEventListener() {}
+  }
+  const document = {
+    createElement: (tag) => new El(tag),
+    body: new El("body"),
+  };
+  Object.defineProperty(globalThis, "document", { configurable: true, writable: true, value: document });
+  return { document, El };
+}
 const ok = (name) => console.log(`  ✅ ${name}`);
 const fail = (name, detail) => {
   failures++;
@@ -20,7 +61,7 @@ const fail = (name, detail) => {
 };
 
 // ── 1. Syntax ────────────────────────────────────────────────
-console.log("1/5 syntax (node --check)");
+console.log("1/11 syntax (node --check)");
 try {
   for (const f of JS_FILES) {
     execFileSync(process.execPath, ["--check", f], { cwd: root, stdio: "pipe" });
@@ -31,7 +72,7 @@ try {
 }
 
 // ── 2. Catalog integrity ─────────────────────────────────────
-console.log("2/5 model catalog");
+console.log("2/11 model catalog");
 try {
   const c = await import("../js/config.js");
   const errs = [];
@@ -56,7 +97,7 @@ try {
 }
 
 // ── 3. No Polish text ────────────────────────────────────────
-console.log("3/5 Polish-text sweep");
+console.log("3/11 Polish-text sweep");
 {
   const diacritics = /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/;
   // Distinctive ASCII-only Polish words (backstop for lone words like "ignoruj").
@@ -99,7 +140,7 @@ console.log("3/5 Polish-text sweep");
 }
 
 // ── 4. ID wiring (HTML ↔ JS) ────────────────────────────────
-console.log("4/5 element-id wiring");
+console.log("4/11 element-id wiring");
 {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
   const js = JS_FILES.filter((f) => f.startsWith("js/"))
@@ -118,14 +159,13 @@ console.log("4/5 element-id wiring");
 }
 
 // ── 5. Module evaluation smoke test ──────────────────────────
-console.log("5/5 module evaluation");
+console.log("5/11 module evaluation");
 try {
-  const store = {};
   Object.defineProperty(globalThis, "localStorage", {
     value: {
-      getItem: (k) => store[k] ?? null,
-      setItem: (k, v) => { store[k] = String(v); },
-      removeItem: (k) => { delete store[k]; },
+      getItem: (k) => memStore[k] ?? null,
+      setItem: (k, v) => { memStore[k] = String(v); },
+      removeItem: (k) => { delete memStore[k]; },
     },
   });
   Object.defineProperty(globalThis, "navigator", {
@@ -145,6 +185,7 @@ try {
     hidden: false, innerHTML: "", textContent: "", value: "", disabled: false,
   });
   Object.defineProperty(globalThis, "document", {
+    configurable: true, // section 6 swaps in a richer mini-DOM
     value: {
       addEventListener() {}, querySelector() { return null; },
       querySelectorAll() { return []; }, getElementById() { return null; },
@@ -156,12 +197,309 @@ try {
   globalThis.history = { replaceState() {} };
   globalThis.matchMedia = () => ({ matches: false, addEventListener() {} });
   globalThis.requestAnimationFrame = () => 0;
-  for (const m of ["config", "hardware", "storage", "markdown", "ui", "engine", "engine-proxy", "download-hub", "app"]) {
+  for (const m of ["config", "model-check", "hardware", "storage", "markdown", "ui", "engine", "engine-proxy", "stream-render", "resilience", "download-hub", "app"]) {
     await import(`../js/${m}.js`);
   }
   ok("all app modules evaluate without errors");
 } catch (e) {
   fail("module eval", e.stack?.split("\n").slice(0, 2).join(" | ") || e.message);
+}
+
+// ── 6. Streaming renderer equivalence ────────────────────────
+// The incremental renderer must produce exactly the same HTML as the
+// one-shot renderer (otherwise answers would look different while
+// streaming than they do after a reload).
+console.log("6/11 streaming renderer");
+try {
+  const { findStableCut } = await import("../js/stream-render.js");
+  const { renderMarkdown } = await import("../js/markdown.js");
+  const norm = (h) => h.replace(/>\n</g, "><");
+  const samples = [
+    "Hello **world**\n\nSecond paragraph here.",
+    "# Title\n\nSome text.\n\n- a\n- b\n\nDone.",
+    "Text before\n\n```js\nconst a = 1;\n\nconst b = 2;\n```\n\nAfter code.",
+    "| a | b |\n|---|---|\n| 1 | 2 |\n\nnext",
+    "> quote\n> more\n\nafter",
+    "One very long paragraph that keeps going and going without a blank line for a long time, which is exactly what happens when a model streams prose continuously for many tokens in a row.\n\nSecond block.",
+    "- item 1\n- item 2\n\n1. one\n2. two\n\n---\n\nlast",
+    "A paragraph.\n\n```python\nprint('hi')\n```\n\n### Heading\n\nMore text with `code` and a [link](https://x.dev).",
+  ];
+  const errs = [];
+  for (const s of samples) {
+    let from = 0;
+    const frags = [];
+    for (let guard = 0; guard < 200; guard++) {
+      const cut = findStableCut(s, from);
+      if (cut < from || cut > s.length) { errs.push(`bad cut ${cut} for ${JSON.stringify(s.slice(0, 20))}`); break; }
+      if (cut === from) break;
+      frags.push(renderMarkdown(s.slice(from, cut)));
+      from = cut;
+    }
+    frags.push(renderMarkdown(s.slice(from)));
+    if (norm(frags.join("")) !== norm(renderMarkdown(s))) {
+      errs.push(`incremental != full for ${JSON.stringify(s.slice(0, 24))}`);
+    }
+    // cuts must never move backwards while the text grows
+    let prev = 0;
+    for (let i = 0; i <= s.length; i++) {
+      const c = findStableCut(s.slice(0, i), prev);
+      if (c < prev) { errs.push("non-monotonic cut"); break; }
+      prev = c;
+    }
+  }
+  if (errs.length) fail("stream renderer", errs.slice(0, 3).join("; "));
+
+  // The real class, driven with a minimal DOM: it must (a) end up with
+  // exactly the full render and (b) re-render only a fraction of the text
+  // the naive "re-render everything on every token" approach would handle.
+  const dom = makeMiniDom();
+  const answer =
+    "# OffChat\n\nA streamed answer with **bold** text and a list:\n\n" +
+    "- first point about speed\n- second point about memory\n\n" +
+    "```js\nconst cache = new Map();\n```\n\n" +
+    "And a closing paragraph that keeps the tail busy for a while longer.\n\n" +
+    "### Summary\n\nIncremental rendering keeps weak devices responsive.\n\n" +
+    "| a | b |\n|---|---|\n| 1 | 2 |\n";
+  const host = dom.document.createElement("div");
+  const { StreamRenderer } = await import("../js/stream-render.js");
+  const renderer = new StreamRenderer(host, { caret: true, placeholder: "<i></i>" });
+  let tailWork = 0;
+  let naiveWork = 0;
+  Object.defineProperty(renderer.tailEl, "innerHTML", {
+    set(v) { tailWork += String(v).length; },
+    get() { return ""; },
+  });
+  for (let i = 1; i <= answer.length; i++) {
+    renderer.setText(answer.slice(0, i));
+    naiveWork += i;
+    if (i % 40 === 0) await new Promise((r) => setTimeout(r, 10));
+  }
+  renderer.finish(answer);
+  if (host.innerHTML !== renderMarkdown(answer)) errs.push("StreamRenderer.finish() != renderMarkdown()");
+  if (renderer.stableLen < answer.length / 3) {
+    errs.push(`finished blocks are not moving to the stable DOM part (stableLen=${renderer.stableLen}/${answer.length})`);
+  }
+
+  // Worst case: repaint after EVERY token (interval 0). Even then the
+  // incremental renderer must re-render only a fraction of the text.
+  const host2 = dom.document.createElement("div");
+  const fast = new StreamRenderer(host2, { caret: true, interval: 0, maxInterval: 0 });
+  let fastTail = 0;
+  let fastNaive = 0;
+  Object.defineProperty(fast.tailEl, "innerHTML", {
+    set(v) { fastTail += String(v).length; },
+    get() { return ""; },
+  });
+  for (let i = 1; i <= answer.length; i++) {
+    fast.setText(answer.slice(0, i));
+    fastNaive += i;
+    if (i % 120 === 0) await new Promise((r) => setTimeout(r, 0));
+  }
+  fast.finish(answer);
+  if (host2.innerHTML !== renderMarkdown(answer)) errs.push("worst-case finish() != renderMarkdown()");
+  // Per-token repainting still re-renders the current block, so ~40% of the
+  // naive work is the honest worst case; the app repaints at 70-240 ms.
+  if (fastTail > fastNaive * 0.6) {
+    errs.push(`repaint too heavy: ${fastTail} chars vs naive ${fastNaive}`);
+  }
+  if (errs.length) fail("stream renderer", errs.slice(0, 3).join("; "));
+  else ok(`${samples.length} answers identical · worst-case repaint is ${(100 * fastTail / fastNaive).toFixed(1)}% of naive`);
+} catch (e) {
+  fail("stream renderer", e.message);
+}
+
+// ── 7. Crash-guard helpers ───────────────────────────────────
+console.log("7/11 crash guard");
+try {
+  for (const k of Object.keys(memStore)) delete memStore[k];
+  const { Draft, BusyMark, closedPartialStats, isInterruptedMessage } =
+    await import("../js/resilience.js");
+  const errs = [];
+  Draft.save("t-1", "half written question");
+  if (Draft.read()?.text !== "half written question") errs.push("draft not restored");
+  Draft.clear();
+  if (Draft.read() !== null) errs.push("draft not cleared");
+  BusyMark.set({ threadId: "t-1" });
+  if (BusyMark.read()?.threadId !== "t-1") errs.push("busy mark lost");
+  BusyMark.clear();
+  if (BusyMark.read() !== null) errs.push("busy mark not cleared");
+  if (BusyMark.read() !== null) errs.push("stale busy mark survived");
+  const closed = closedPartialStats({ streaming: true, tokPerSec: 3 });
+  if (closed.streaming || !closed.cutOff || !closed.interrupted) errs.push("partial stats wrong");
+  if (!isInterruptedMessage({ streaming: true })) errs.push("streaming not detected");
+  if (isInterruptedMessage({ cutOff: true })) errs.push("finished answer flagged");
+  if (errs.length) fail("crash guard", errs.join("; "));
+  else ok("draft + interrupted-answer recovery behave");
+} catch (e) {
+  fail("crash guard", e.message);
+}
+
+// ── 8. Service-worker shell completeness ─────────────────────
+// Every shipped JS module must be precached, otherwise the offline
+// experience breaks the first time one of them is added.
+console.log("8/11 service-worker shell");
+{
+  const sw = fs.readFileSync(path.join(root, "sw.js"), "utf8");
+  const missing = JS_FILES.filter((f) => f.startsWith("js/"))
+    .filter((f) => !sw.includes(`./${f}`));
+  if (missing.length) fail("sw shell", "not precached: " + missing.join(", "));
+  else ok("all js modules precached by sw.js");
+}
+
+// ── 9. Model preflight (the "Unauthorized access to file" bug) ──
+// Hugging Face answers 401 for a repository that does not exist, so the
+// preflight must (a) detect it, (b) repair renamed repos, (c) pick a
+// variant that really exists — all BEFORE downloading a single byte.
+console.log("9/11 model preflight");
+try {
+  for (const k of Object.keys(memStore)) delete memStore[k];
+  const mc = await import("../js/model-check.js");
+  const MOD = {
+    engine: "transformers",
+    modelId: "onnx-community/TinyLlama-1.1B-Chat-v1.0",
+    dtypes: ["q8", "q4", "q4f16"],
+  };
+  const tree = (files) => ({ ok: true, status: 200, json: async () => files });
+  const err401 = { ok: false, status: 401, json: async () => ({ error: "Invalid username or password." }) };
+  const file = (path, size) => ({ type: "file", path, size });
+
+  // A) healthy repo → the first dtype that exists wins (q8 before q4)
+  const healthy = {
+    "onnx/model_q4.onnx": 100,
+    "onnx/model_quantized.onnx": 60,
+    "onnx/model_q4f16.onnx": 40,
+  };
+  let r = await mc.probeWasmModel(MOD, {
+    fetchImpl: async () => tree(Object.entries(healthy).map(([f, n]) => file(f, n))),
+    force: true,
+  });
+  if (!r.ok) throw new Error("healthy repo rejected");
+  if (r.dtype !== "q8") throw new Error("expected q8 preference, got " + r.dtype);
+  if (r.bytes !== 60) throw new Error("expected the q8 file size, got " + r.bytes);
+
+  // B) renamed repo: declared id 401s, the -ONNX twin works
+  const calls = [];
+  const repaired = await mc.probeWasmModel(MOD, {
+    force: true,
+    fetchImpl: async (url) => {
+      calls.push(url);
+      if (url.includes("TinyLlama-1.1B-Chat-v1.0-ONNX")) {
+        return tree([file("onnx/model_q4.onnx", 910), file("onnx/model_q8.onnx", 1)]);
+      }
+      return err401;
+    },
+  });
+  // the twin only publishes _q4 → the preflight must downgrade to it
+  if (!repaired.ok || !repaired.repaired) throw new Error("rename not repaired: " + JSON.stringify(repaired));
+  if (repaired.dtype !== "q4") throw new Error("expected q4 fallback, got " + repaired.dtype);
+  if (!calls.some((u) => u.includes("-ONNX"))) throw new Error("never tried the canonical name");
+
+  // C) repo really gone (401 everywhere) → precise code, not a raw string
+  for (const k of Object.keys(memStore)) delete memStore[k];
+  const gone = await mc.probeWasmModel(
+    { engine: "transformers", modelId: "onnx-community/Does-Not-Exist", dtypes: ["q4"] },
+    { force: true, fetchImpl: async () => err401 }
+  );
+  if (gone.ok || gone.code !== "unauthorized") throw new Error("401 not classified: " + JSON.stringify(gone));
+
+  // D) repo fine but no usable variant → reported, never a crash
+  for (const k of Object.keys(memStore)) delete memStore[k];
+  const noVariant = await mc.probeWasmModel(
+    { engine: "transformers", modelId: "onnx-community/No-Variant", dtypes: ["q4"] },
+    { force: true, fetchImpl: async () => tree([file("onnx/model_fp16.onnx", 10)]) }
+  );
+  if (noVariant.ok) throw new Error("missing variant accepted");
+
+  // E) the Hub becomes unreachable → cached answer keeps the app working
+  const again = await mc.probeWasmModel(
+    { engine: "transformers", modelId: "onnx-community/No-Variant", dtypes: ["q4"] },
+    { fetchImpl: async () => { throw new Error("offline"); } }
+  );
+  if (again.ok || !again.cached) throw new Error("cache not used offline");
+
+  // F) external-data shards are counted (gemma-3 / Llama-3.2 layout)
+  const ext = mc.pickDtype(
+    ["q4"],
+    ["onnx/model_q4.onnx", "onnx/model_q4.onnx_data", "onnx/model_q4.onnx_data_1"]
+  );
+  if (!ext || ext.data.length !== 2) throw new Error("external data shards not detected");
+  ok("detects 401, repairs renames, picks real variants, caches results");
+} catch (e) {
+  fail("model preflight", e.message);
+}
+
+// ── 10. Error classification ─────────────────────────────────
+console.log("10/11 error classification");
+try {
+  const { classifyError } = await import("../js/model-check.js");
+  const cases = [
+    ['Unauthorized access to file: "https://huggingface.co/a/b/resolve/main/x.onnx".', "unauthorized"],
+    ['Forbidden access to file: "https://huggingface.co/a/b/resolve/main/x.onnx".', "forbidden"],
+    ["Could not locate file: \"https://huggingface.co/a/b/resolve/main/x.onnx\".", "missing-file"],
+    ["Bad gateway error occurred while trying to load file: \"https://x/y\".", "server"],
+    ["Error (503) occurred while trying to load file: \"https://x/y\".", "server"],
+    ["The device (webgpu) does not support fp16.", "f16"],
+    ["WebGPU device lost", "gpu"],
+    ["Failed to allocate memory for buffer", "memory"],
+    ["MODEL_NOT_FOUND: foo is not shipped with this WebLLM build.", "not-in-build"],
+    ["QuotaExceededError: storage full", "storage"],
+  ];
+  const errs = [];
+  for (const [msg, expected] of cases) {
+    const got = classifyError(new Error(msg)).code;
+    if (got !== expected) errs.push(`${expected} ≠ ${got}`);
+  }
+  const located = classifyError(new Error(cases[0][0]));
+  if (!String(located.url).includes("huggingface.co")) errs.push("url not extracted");
+  if (located.status !== 401) errs.push("status not extracted");
+  if (errs.length) fail("classification", errs.join("; "));
+  else ok(`${cases.length} engine errors map to actionable codes`);
+} catch (e) {
+  fail("classification", e.message);
+}
+
+// ── 11. Potato profile + catalog invariants ──────────────────
+console.log("11/11 potato profile");
+try {
+  const c = await import("../js/config.js");
+  const mc = await import("../js/model-check.js");
+  const { potatoProfile, shouldSuggestPotato } = mc;
+  const errs = [];
+  const p = potatoProfile();
+  for (const [k, v] of Object.entries(p)) {
+    if (!(k in c.DEFAULT_SETTINGS)) errs.push(`potato sets unknown setting: ${k}`);
+    if (c.DEFAULT_SETTINGS[k] === undefined && v === undefined) errs.push(`${k} undefined`);
+  }
+  if (p.potato !== true || p.safeMode !== "on") errs.push("potato must enable Safe Mode");
+  const lightest = c.MODEL_CATALOG.filter((m) => m.stable).sort((a, b) => a.vramMB - b.vramMB)[0];
+  if (!lightest || lightest.vramMB > 700) errs.push(`no light WebGPU model to fall back to (${lightest?.key})`);
+  if (!(p.maxTokens <= c.DEFAULT_SETTINGS.maxTokens)) errs.push("potato must shrink answers");
+  if (!shouldSuggestPotato({ ramGB: 2, cores: 4, mobile: true, webgpu: { supported: true } })) errs.push("2 GB phone not flagged");
+  if (!shouldSuggestPotato({ ramGB: 4, cores: 4, mobile: true, webgpu: { supported: false } })) errs.push("old phone not flagged");
+  if (shouldSuggestPotato({ ramGB: 8, cores: 8, webgpu: { supported: false } })) errs.push("capable desktop without WebGPU should not be prompted");
+  if (shouldSuggestPotato({ ramGB: 8, cores: 8, webgpu: { supported: true } })) errs.push("strong device flagged");
+  // Verified-repo invariants: every WASM entry carries measured sizes and a
+  // preference order that the preflight can actually satisfy.
+  for (const m of c.WASM_CATALOG) {
+    if (m.engine !== "transformers") continue;
+    if (!Array.isArray(m.dtypes) || m.dtypes[0] !== "q8") errs.push(`${m.key}: q8 must come first`);
+    if (!m.files || typeof m.files !== "object") errs.push(`${m.key}: no verified sizes`);
+    else {
+      const first = m.files[m.dtypes[0]];
+      if (!(first > 0)) errs.push(`${m.key}: no size for ${m.dtypes[0]}`);
+      if (Math.abs(first - m.sizeMB) > Math.max(5, first * 0.1)) {
+        errs.push(`${m.key}: sizeMB ${m.sizeMB} ≠ measured ${first}`);
+      }
+      for (const d of m.dtypes) if (!(m.files[d] > 0)) errs.push(`${m.key}: missing size for ${d}`);
+    }
+    if (!mc.VERIFIED_REPOS.has(m.modelId)) {
+      errs.push(`${m.key}: ${m.modelId} was never verified against the Hub`);
+    }
+  }
+  if (errs.length) fail("potato/catalog", errs.slice(0, 4).join("; "));
+  else ok("potato profile valid · every WASM model has verified, consistent sizes");
+} catch (e) {
+  fail("potato/catalog", e.message);
 }
 
 console.log(failures ? `\n❌ ${failures} check(s) failed` : "\n🎉 all checks passed");

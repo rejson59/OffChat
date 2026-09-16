@@ -43,9 +43,15 @@ export async function probeHardware() {
   // --- WebGPU ---
   try {
     if (navigator.gpu) {
-      const adapter = await navigator.gpu.requestAdapter({
-        powerPreference: "high-performance",
-      }).catch(() => null);
+      // Some devices refuse a "high-performance" adapter (drivers on Android)
+      // while the default one works fine — falling back to it here avoids
+      // wrongly sending a capable phone to the slow CPU engine.
+      let adapter = await navigator.gpu
+        .requestAdapter({ powerPreference: "high-performance" })
+        .catch(() => null);
+      if (!adapter) {
+        adapter = await navigator.gpu.requestAdapter().catch(() => null);
+      }
       if (adapter) {
         const features = adapter.features;
         hw.webgpu.supported = true;
@@ -105,6 +111,26 @@ export function isWeakDevice(hw) {
   // No GPU at all + little RAM → the CPU path is also fragile.
   if (!hw.webgpu.supported && hw.mobile && hw.ramGB <= 4) return true;
   return false;
+}
+
+/**
+ * Rough performance class of the device. Drives adaptive repaint rates,
+ * Safe Mode defaults and the idle-unload policy:
+ *   "low"  — weak phones, small RAM, no WebGPU/CPU-only, data saver
+ *   "mid"  — average phone or an older laptop
+ *   "high" — desktop with room to spare, or a strong mobile GPU
+ */
+export function perfTier(hw) {
+  if (!hw) return "mid";
+  const ram = hw.ramGB || 4;
+  const cores = hw.cores || 4;
+  const gpu = !!hw.webgpu?.supported;
+  if (hw.connection?.saveData) return "low";
+  if (isWeakDevice(hw)) return "low";
+  if (!gpu) return "low";
+  if (!hw.mobile && ram >= 8) return "high";
+  if (hw.mobile && ram >= 8 && cores >= 8) return "high";
+  return "mid";
 }
 
 /**
@@ -182,6 +208,12 @@ export function recommendModels(hw, webCatalog, wasmCatalog) {
     warnings.push({
       icon: "info",
       text: "Data-saver mode detected — we recommend the smallest models.",
+    });
+  }
+  if (hw.webgpu?.supported && hw.webgpu.maxBufferMB > 0 && hw.webgpu.maxBufferMB < 256) {
+    warnings.push({
+      icon: "warn",
+      text: "This GPU has a small WebGPU buffer limit — bigger models may fail to load. The smallest ones are the safe bet.",
     });
   }
   if (isWeakDevice(hw)) {

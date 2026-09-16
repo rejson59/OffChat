@@ -7,6 +7,7 @@
 // Engine libraries load LAZILY from a CDN (with a fallback list).
 // ─────────────────────────────────────────────────────────────
 import { ENGINE_CDN, ORT_WASM_CDN } from "./config.js";
+import { classifyError } from "./model-check.js";
 
 async function importFirst(urls) {
   let lastErr = null;
@@ -20,6 +21,31 @@ async function importFirst(urls) {
   throw lastErr instanceof Error
     ? lastErr
     : new Error("Could not download the AI engine from any CDN.");
+}
+
+/**
+ * Does this error look like the GPU/engine died (device lost, OOM,
+ * a failed allocation)? Those errors leave the engine unusable, so the
+ * engine marks itself dead and the app can reload it transparently.
+ */
+export function isDeviceCrash(err) {
+  const m = String((err && (err.message || err)) || "");
+  return /device lost|lost device|out of memory|\bOOM\b|allocation failed|failed to allocate|createBuffer|internal error|mapAsync|GPUDevice|GPU buffer/i.test(m);
+}
+
+/**
+ * Attach a machine-readable code (see model-check.classifyError) to an
+ * engine error. The worker forwards `code`/`status`/`url` to the main
+ * thread, so the UI can explain *why* a model failed instead of dumping
+ * a raw library string at the user.
+ */
+export function markError(err) {
+  const info = classifyError(err);
+  const e = err instanceof Error ? err : new Error(String(err || "Engine error"));
+  if (!e.code) e.code = info.code;
+  if (e.status === undefined) e.status = info.status;
+  if (!e.url) e.url = info.url;
+  return e;
 }
 
 function mapWebLLMProgress(rep) {
@@ -159,11 +185,16 @@ export class Engine {
     };
 
     onProgress?.({ phase: "download", progress: 0, text: "Connecting… (first download weighs hundreds of MB)" });
-    this.wEngine = await webllm.CreateMLCEngine(modelId, {
-      appConfig,
-      logLevel: "WARN",
-      initProgressCallback: (rep) => onProgress?.(mapWebLLMProgress(rep)),
-    });
+    try {
+      this.wEngine = await webllm.CreateMLCEngine(modelId, {
+        appConfig,
+        logLevel: "WARN",
+        initProgressCallback: (rep) => onProgress?.(mapWebLLMProgress(rep)),
+      });
+    } catch (e) {
+      // e.g. an unreachable weight repo, a GPU limit, or a broken cache
+      throw markError(e);
+    }
     this.kind = "webllm";
     this.modelId = modelId;
     onProgress?.({ phase: "ready", progress: 1, text: "Model ready" });
@@ -172,6 +203,15 @@ export class Engine {
 
   async generateWebLLM(messages, { onToken, temperature = 0.7, maxTokens = 512, topP = 0.9 } = {}) {
     if (!this.wEngine) throw new Error("The WebLLM engine is not loaded.");
+    try {
+      return await this._generateWebLLM(messages, { onToken, temperature, maxTokens, topP });
+    } catch (e) {
+      if (isDeviceCrash(e)) this.markCrashed();
+      throw e;
+    }
+  }
+
+  async _generateWebLLM(messages, { onToken, temperature = 0.7, maxTokens = 512, topP = 0.9 } = {}) {
     const myGen = ++this.gen;
     this.aborted = false;
     const t0 = performance.now();
@@ -221,7 +261,7 @@ export class Engine {
   }
 
   // ── Transformers.js (WASM/CPU) ───────────────────────────────
-  async loadTransformers({ modelId, dtypes = ["q4f16", "q4", "q8"], device = "wasm", threads = 1, onProgress }) {
+  async loadTransformers({ modelId, dtypes = ["q8", "q4", "q4f16"], device = "wasm", threads = 1, externalData = 0, onProgress }) {
     this.abort();
     onProgress?.({ phase: "download", progress: 0, text: "Loading the Transformers.js engine (WASM)…" });
     const tf = (this.tf ||= await importFirst(ENGINE_CDN.transformers));
@@ -237,8 +277,14 @@ export class Engine {
           onnx.wasm.simd = true;
         }
         if (onnx) onnx.logLevel = "error";
-        if (tf.env.backends?.onnx?.wasm && typeof Proxy === "undefined") {
+        // Streaming callbacks only work on the same thread as the session,
+        // so ORT's proxy worker stays off. Without COOP/COEP headers WASM
+        // threading is unavailable — asking for it would crash the session.
+        if (onnx?.wasm) {
           onnx.wasm.proxy = false;
+          onnx.wasm.numThreads = globalThis.crossOriginIsolated
+            ? Math.max(1, Math.min(4, Number(threads) || 1))
+            : 1;
         }
       }
     } catch { /* best-effort */ }
@@ -260,6 +306,10 @@ export class Engine {
         this.pipe = await tf.pipeline("text-generation", modelId, {
           device,
           dtype,
+          // Repos like gemma-3-270m / Llama-3.2-1B keep the weights in
+          // `model_q4.onnx_data` shards next to a tiny graph file; without
+          // this flag ONNX Runtime cannot build the session at all.
+          ...(externalData ? { use_external_data_format: externalData } : {}),
           progress_callback: (p) => onProgress?.(mapTFProgress(p, dtype)),
         });
         this.tok = this.pipe.tokenizer;
@@ -268,14 +318,14 @@ export class Engine {
         onProgress?.({ phase: "ready", progress: 1, text: "Model ready" });
         return { modelId, engine: "transformers", dtype };
       } catch (e) {
-        lastErr = e;
+        lastErr = markError(e);
         this.pipe = null;
         this.tok = null;
       }
     }
     throw lastErr instanceof Error
       ? lastErr
-      : new Error(`Could not load model ${modelId} in any variant.`);
+      : markError(new Error(`Could not load model ${modelId} in any variant.`));
   }
 
   buildTFPrompt(messages) {
@@ -300,6 +350,15 @@ export class Engine {
 
   async generateTransformers(messages, { onToken, temperature = 0.7, maxTokens = 512, topP = 0.9 } = {}) {
     if (!this.pipe || !this.tok) throw new Error("The WASM engine is not loaded.");
+    try {
+      return await this._generateTransformers(messages, { onToken, temperature, maxTokens, topP });
+    } catch (e) {
+      if (isDeviceCrash(e)) this.markCrashed();
+      throw e;
+    }
+  }
+
+  async _generateTransformers(messages, { onToken, temperature = 0.7, maxTokens = 512, topP = 0.9 } = {}) {
     const tf = this.tf;
     const myGen = ++this.gen;
     this.aborted = false;
@@ -377,7 +436,27 @@ export class Engine {
     this.modelId = null;
   }
 
+  /**
+   * Mark the engine as dead after a GPU crash so the app knows it must
+   * reload the model before the next message (instead of failing once).
+   */
+  markCrashed() {
+    this.crashed = true;
+    this.crashedAt = Date.now();
+    try { this.wEngine?.unload?.(); } catch { /* ignore */ }
+    try { this.pipe?.dispose?.(); } catch { /* ignore */ }
+    this.wEngine = null;
+    this.pipe = null;
+    this.tok = null;
+    this.kind = null;
+  }
+
   state() {
-    return { kind: this.kind, modelId: this.modelId, loaded: this.loaded };
+    return {
+      kind: this.kind,
+      modelId: this.modelId,
+      loaded: this.loaded,
+      crashed: !!this.crashed,
+    };
   }
 }

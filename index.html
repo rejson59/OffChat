@@ -20,6 +20,18 @@
   <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
   <link rel="dns-prefetch" href="https://esm.sh">
   <link rel="stylesheet" href="./css/style.css">
+  <!-- Static imports of app.js: start them in parallel instead of waiting
+       for the module graph to be discovered file by file. -->
+  <link rel="modulepreload" href="./js/app.js">
+  <link rel="modulepreload" href="./js/config.js">
+  <link rel="modulepreload" href="./js/model-check.js">
+  <link rel="modulepreload" href="./js/storage.js">
+  <link rel="modulepreload" href="./js/ui.js">
+  <link rel="modulepreload" href="./js/hardware.js">
+  <link rel="modulepreload" href="./js/markdown.js">
+  <link rel="modulepreload" href="./js/stream-render.js">
+  <link rel="modulepreload" href="./js/resilience.js">
+  <link rel="modulepreload" href="./js/engine-proxy.js">
 </head>
 <body data-theme="auto" data-accent="violet" data-bg="aurora" data-bubbles="round">
   <!-- Background: animated aurora (disabled in settings / reduced-motion / safe mode) -->
@@ -165,7 +177,7 @@
         <div class="load-more-wrap" id="load-more-wrap" hidden>
           <button class="btn ghost sm" id="btn-load-more">Load older messages</button>
         </div>
-        <section class="messages" id="messages" aria-live="polite" aria-label="Messages"></section>
+        <section class="messages" id="messages" role="log" aria-live="polite" aria-busy="false" aria-label="Messages"></section>
 
         <button class="fab glass" id="scroll-fab" aria-label="Scroll to bottom" hidden>
           <svg><use href="#i-down"/></svg>

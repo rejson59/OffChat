@@ -280,9 +280,12 @@ export class DownloadHub {
 
     // Pause the game when the page is hidden (battery + GPU).
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) this.pauseGame();
-      else if (this.isActive && !this.isMinimized && this.activeTab === "game") {
-        this.resumeGame();
+      if (document.hidden) {
+        this.pauseGame();
+        this.stopTriviaTimer(); // no point redrawing a hidden carousel
+      } else if (this.isActive) {
+        this.startTriviaTimer();
+        if (!this.isMinimized && this.activeTab === "game") this.resumeGame();
       }
     });
 
