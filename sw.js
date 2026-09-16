@@ -4,7 +4,7 @@
 // (WebLLM / Transformers.js) keep them in their own Cache API stores.
 // Double-caching would waste hundreds of MB on weak phones.
 // ─────────────────────────────────────────────────────────────
-const APP_CACHE = "offchat-shell-v5";
+const APP_CACHE = "offchat-shell-v6";
 const CDN_CACHE = "offchat-cdn-v1";
 
 const SHELL = [
@@ -22,6 +22,8 @@ const SHELL = [
   "./js/engine-proxy.js",
   "./js/llm-worker.js",
   "./js/markdown.js",
+  "./js/stream-render.js",
+  "./js/resilience.js",
   "./js/ui.js",
   "./icons/icon.svg",
   "./icons/icon-192.png",
@@ -51,7 +53,13 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(APP_CACHE);
-      await cache.addAll(SHELL.map((u) => new Request(u, { cache: "reload" })));
+      // Add file by file: a single missing file (or one flaky request on a
+      // weak connection) must not break the whole offline shell.
+      await Promise.all(
+        SHELL.map((u) =>
+          cache.add(new Request(u, { cache: "reload" })).catch(() => null)
+        )
+      );
       await self.skipWaiting();
     })()
   );

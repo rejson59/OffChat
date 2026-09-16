@@ -45,6 +45,7 @@ function migrateSettings(stored) {
     ["bubbleStyle", ["soft", "round", "sharp"]],
     ["ctxCap", ["auto", "1024", "2048", "4096", "full"]],
     ["cacheBackend", ["cache", "opfs"]],
+    ["idleUnload", ["auto", "off", "5", "15", "60"]],
   ]) {
     if (!allowed.includes(out[key])) out[key] = DEFAULT_SETTINGS[key];
   }
@@ -230,6 +231,8 @@ export const Threads = {
   },
 
   async remove(id) {
+    threadTouch.delete(id);
+    threadAdds.delete(id);
     await Messages.clearThread(id);
     return guard(
       () => tx("threads", "readwrite", (st) => st.delete(id)),
@@ -311,8 +314,18 @@ export const Messages = {
       () => tx("messages", "readwrite", (st) => st.add(msg)),
       async () => { memFallback.messages.push(msg); }
     );
-    Threads.update(threadId, {}).catch(() => {});
-    pruneMessages(threadId).catch(() => {});
+    // Keep the "last activity" timestamp fresh for the thread list, but do
+    // not hammer IndexedDB on every message of a burst (weak storage!).
+    const now = Date.now();
+    const lastTouch = threadTouch.get(threadId) || 0;
+    if (now - lastTouch > 2000) {
+      threadTouch.set(threadId, now);
+      Threads.update(threadId, {}).catch(() => {});
+    }
+    // Pruning reads hundreds of records — do it rarely, not after every add.
+    const adds = (threadAdds.get(threadId) || 0) + 1;
+    threadAdds.set(threadId, adds);
+    if (adds % 20 === 0) pruneMessages(threadId).catch(() => {});
     return msg;
   },
 
@@ -383,8 +396,11 @@ export const Messages = {
   },
 };
 
+const threadTouch = new Map(); // threadId -> last "updatedAt" write
+const threadAdds = new Map();  // threadId -> messages added this session
+
 async function pruneMessages(threadId) {
-  const list = await Messages.list(threadId, LIMITS.maxMessagesPerThread + 50);
+  const list = await Messages.list(threadId, LIMITS.maxMessagesPerThread + 1);
   if (list.length <= LIMITS.maxMessagesPerThread) return;
   const victims = list.slice(0, list.length - LIMITS.maxMessagesPerThread);
   for (const m of victims) {

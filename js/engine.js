@@ -22,6 +22,16 @@ async function importFirst(urls) {
     : new Error("Could not download the AI engine from any CDN.");
 }
 
+/**
+ * Does this error look like the GPU/engine died (device lost, OOM,
+ * a failed allocation)? Those errors leave the engine unusable, so the
+ * engine marks itself dead and the app can reload it transparently.
+ */
+export function isDeviceCrash(err) {
+  const m = String((err && (err.message || err)) || "");
+  return /device lost|lost device|out of memory|\bOOM\b|allocation failed|failed to allocate|createBuffer|internal error|mapAsync|GPUDevice|GPU buffer/i.test(m);
+}
+
 function mapWebLLMProgress(rep) {
   const text = String(rep?.text || "");
   const p = Math.max(0, Math.min(1, Number(rep?.progress ?? 0)));
@@ -172,6 +182,15 @@ export class Engine {
 
   async generateWebLLM(messages, { onToken, temperature = 0.7, maxTokens = 512, topP = 0.9 } = {}) {
     if (!this.wEngine) throw new Error("The WebLLM engine is not loaded.");
+    try {
+      return await this._generateWebLLM(messages, { onToken, temperature, maxTokens, topP });
+    } catch (e) {
+      if (isDeviceCrash(e)) this.markCrashed();
+      throw e;
+    }
+  }
+
+  async _generateWebLLM(messages, { onToken, temperature = 0.7, maxTokens = 512, topP = 0.9 } = {}) {
     const myGen = ++this.gen;
     this.aborted = false;
     const t0 = performance.now();
@@ -237,8 +256,14 @@ export class Engine {
           onnx.wasm.simd = true;
         }
         if (onnx) onnx.logLevel = "error";
-        if (tf.env.backends?.onnx?.wasm && typeof Proxy === "undefined") {
+        // Streaming callbacks only work on the same thread as the session,
+        // so ORT's proxy worker stays off. Without COOP/COEP headers WASM
+        // threading is unavailable — asking for it would crash the session.
+        if (onnx?.wasm) {
           onnx.wasm.proxy = false;
+          onnx.wasm.numThreads = globalThis.crossOriginIsolated
+            ? Math.max(1, Math.min(4, Number(threads) || 1))
+            : 1;
         }
       }
     } catch { /* best-effort */ }
@@ -300,6 +325,15 @@ export class Engine {
 
   async generateTransformers(messages, { onToken, temperature = 0.7, maxTokens = 512, topP = 0.9 } = {}) {
     if (!this.pipe || !this.tok) throw new Error("The WASM engine is not loaded.");
+    try {
+      return await this._generateTransformers(messages, { onToken, temperature, maxTokens, topP });
+    } catch (e) {
+      if (isDeviceCrash(e)) this.markCrashed();
+      throw e;
+    }
+  }
+
+  async _generateTransformers(messages, { onToken, temperature = 0.7, maxTokens = 512, topP = 0.9 } = {}) {
     const tf = this.tf;
     const myGen = ++this.gen;
     this.aborted = false;
@@ -377,7 +411,27 @@ export class Engine {
     this.modelId = null;
   }
 
+  /**
+   * Mark the engine as dead after a GPU crash so the app knows it must
+   * reload the model before the next message (instead of failing once).
+   */
+  markCrashed() {
+    this.crashed = true;
+    this.crashedAt = Date.now();
+    try { this.wEngine?.unload?.(); } catch { /* ignore */ }
+    try { this.pipe?.dispose?.(); } catch { /* ignore */ }
+    this.wEngine = null;
+    this.pipe = null;
+    this.tok = null;
+    this.kind = null;
+  }
+
   state() {
-    return { kind: this.kind, modelId: this.modelId, loaded: this.loaded };
+    return {
+      kind: this.kind,
+      modelId: this.modelId,
+      loaded: this.loaded,
+      crashed: !!this.crashed,
+    };
   }
 }

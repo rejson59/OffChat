@@ -175,9 +175,25 @@ body[data-bg="tide"] .blob { opacity: 0.32; filter: blur(130px); animation-durat
 body[data-bg="tide"] .grain { display: none; }
 /* Solid background: no GPU effects at all */
 body[data-bg="solid"] .aurora { display: none; }
-/* Safe mode: freeze blobs to a faint static wash */
+/* Safe mode: the three 60vmax layers with a 90px blur are the most
+   expensive thing on the page (a GPU raster + a full-screen composite),
+   so weak devices get one static, pre-computed gradient instead. */
+body.safe .aurora { display: none; }
+body.safe {
+  background-image:
+    radial-gradient(120% 80% at 12% -10%, rgba(124, 58, 237, 0.30), transparent 62%),
+    radial-gradient(100% 75% at 92% 105%, rgba(34, 211, 238, 0.18), transparent 60%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+}
+body.safe[data-theme="light"] {
+  background-image:
+    radial-gradient(120% 80% at 12% -10%, rgba(124, 58, 237, 0.16), transparent 62%),
+    radial-gradient(100% 75% at 92% 105%, rgba(34, 211, 238, 0.14), transparent 60%);
+}
 body.safe .blob { animation: none; opacity: 0.22; }
 body.safe .grain { display: none; }
+body.safe .caret { animation: none; }
 /* During generation the GPU is busy with inference — pause the
    background animation on every device to avoid contention. */
 body.generating .blob { animation-play-state: paused; }
@@ -325,7 +341,16 @@ body.generating .blob { animation-play-state: paused; }
 
 /* ── Chat ──────────────────────────────────────────────────── */
 .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
-.messages { flex: 1; overflow-y: auto; padding: 0.4rem 0.2rem 1rem; display: flex; flex-direction: column; gap: 0.7rem; scroll-behavior: smooth; }
+.messages {
+  flex: 1; overflow-y: auto; padding: 0.4rem 0.2rem 1rem;
+  display: flex; flex-direction: column; gap: 0.7rem;
+  /* NOT smooth: streaming repaints scroll on every paint and an animated
+     scroll there costs a lot on weak GPUs. "Scroll to bottom" asks for
+     smooth explicitly instead. */
+  scroll-behavior: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
 .load-more-wrap { text-align: center; padding: 0.3rem; }
 
 .msg {
@@ -991,8 +1016,10 @@ body[data-theme="light"] .badge-fast { color: #047857 !important; }
   }
   .messages { scroll-behavior: auto; }
 }
-body.no-anim .blob, body.safe .blob { animation: none; }
+body.no-anim .blob, body.safe .blob { animation: none; will-change: auto; }
 body.no-anim .aurora { opacity: 0.5; }
+body.no-anim .caret { animation: none; }
+body.no-anim .typing i { animation-duration: 2s; }
 body.no-anim .msg, body.safe .msg,
 body.no-anim .model-card, body.safe .model-card,
 body.no-anim .hero, body.safe .hero,
@@ -1004,3 +1031,32 @@ body.no-anim .badge.rec, body.safe .badge.rec,
 body.no-anim .dl-bar i, body.safe .dl-bar i,
 body.no-anim .hero-logo, body.safe .hero-logo,
 body.no-anim .dl-logo, body.safe .dl-logo { animation: none; }
+
+/* ── Streaming answers (incremental renderer) ───────────────── */
+/* Finished Markdown blocks are appended once; only the tail is
+   re-rendered, so a long answer never re-parses the whole text. */
+.stream-stable > *:not(:last-child),
+.stream-tail > *:not(:last-child) { margin-bottom: 0.55rem; }
+.stream-tail { contain: content; }
+/* Huge in-flight blocks (an unfinished code fence) render as plain text
+   until they are complete — much cheaper, visually identical enough. */
+.stream-plain {
+  white-space: pre-wrap; word-break: break-word;
+  font-family: var(--mono); font-size: 0.8rem; line-height: 1.55;
+  opacity: 0.92;
+}
+/* Very long messages: first paint is trimmed, "Show all" expands them. */
+.msg-truncated {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  margin-top: 0.5rem; padding-top: 0.45rem;
+  border-top: 1px dashed var(--stroke-soft);
+  font-size: 0.72rem; color: var(--ink-faint);
+}
+.msg-truncated .btn { font-size: 0.7rem; padding: 0.25rem 0.55rem; }
+
+/* ── Low-end devices: fewer composited layers ────────────────── */
+@media (max-width: 700px), (pointer: coarse) {
+  /* A big blur is the first thing a budget GPU drops frames on. */
+  .msg.ai .bubble { backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  .topbar, .composer-box { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+}

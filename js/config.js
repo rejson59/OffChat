@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 export const APP_NAME = "OffChat";
-export const APP_VERSION = "1.1.0";
+export const APP_VERSION = "1.2.0";
 
 /**
  * Pinned AI engine versions (immutable CDN builds).
@@ -364,6 +364,9 @@ export const MODEL_CATALOG = [
 /**
  * Fallback Transformers.js catalog (WASM/CPU) — when the browser has no WebGPU.
  * dtypes: ONNX quantization variants to try, in order.
+ * q4 first on purpose: int4 weights with fp32 math are the fastest thing
+ * ONNX Runtime Web has for the CPU engine (q4f16 needs expensive fp16
+ * emulation without a GPU), and the fallbacks cover repos that lack it.
  */
 export const WASM_CATALOG = [
   {
@@ -371,7 +374,7 @@ export const WASM_CATALOG = [
     modelId: "HuggingFaceTB/SmolLM2-135M-Instruct",
     name: "SmolLM2 135M", family: "SmolLM2", params: "135M",
     sizeMB: 90, vramMB: 350, ctx: 2048, quality: 2, tier: "wasm",
-    dtypes: ["q4f16", "q4", "q8"], stable: true, tps: [4, 12],
+    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [4, 12],
     estDl: "~5–8 s",
     blurb: "Lightest fallback mode. Simple answers, minimal requirements.",
   },
@@ -380,7 +383,7 @@ export const WASM_CATALOG = [
     modelId: "HuggingFaceTB/SmolLM2-360M-Instruct",
     name: "SmolLM2 360M", family: "SmolLM2", params: "360M",
     sizeMB: 230, vramMB: 600, ctx: 2048, quality: 2, tier: "wasm",
-    dtypes: ["q4f16", "q4", "q8"], stable: true, tps: [2, 7],
+    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [2, 7],
     estDl: "~12–18 s",
     blurb: "Balanced CPU mode: decent speed and quality on weak hardware.",
   },
@@ -389,7 +392,7 @@ export const WASM_CATALOG = [
     modelId: "onnx-community/TinyLlama-1.1B-Chat-v1.0",
     name: "TinyLlama 1.1B", family: "TinyLlama", params: "1.1B",
     sizeMB: 680, vramMB: 1350, ctx: 2048, quality: 2, tier: "wasm",
-    dtypes: ["q4f16", "q4", "q8"], stable: true, tps: [1, 4],
+    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [1, 4],
     estDl: "~30–45 s",
     blurb: "Tiny and quick on CPU. Good for short chats without a GPU.",
   },
@@ -398,7 +401,7 @@ export const WASM_CATALOG = [
     modelId: "onnx-community/Qwen2.5-0.5B-Instruct",
     name: "Qwen 2.5 0.5B", family: "Qwen", params: "0.5B",
     sizeMB: 450, vramMB: 900, ctx: 2048, quality: 3, tier: "wasm",
-    dtypes: ["q4f16", "q4", "q8"], stable: true, tps: [1, 4],
+    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [1, 4],
     estDl: "~20–30 s",
     blurb: "Best quality in CPU mode. Slower, but speaks beautifully.",
   },
@@ -407,7 +410,7 @@ export const WASM_CATALOG = [
     modelId: "onnx-community/Qwen2.5-1.5B-Instruct",
     name: "Qwen 2.5 1.5B", family: "Qwen", params: "1.5B",
     sizeMB: 950, vramMB: 1700, ctx: 2048, quality: 4, tier: "wasm",
-    dtypes: ["q4f16", "q4", "q8"], stable: true, tps: [0.5, 2],
+    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [0.5, 2],
     estDl: "~45–70 s",
     blurb: "Strong CPU option for patient users with faster processors.",
   },
@@ -416,7 +419,7 @@ export const WASM_CATALOG = [
     modelId: "HuggingFaceTB/SmolLM2-1.7B-Instruct",
     name: "SmolLM2 1.7B", family: "SmolLM2", params: "1.7B",
     sizeMB: 1050, vramMB: 1900, ctx: 2048, quality: 3, tier: "wasm",
-    dtypes: ["q4f16", "q4", "q8"], stable: true, tps: [0.5, 2],
+    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [0.5, 2],
     estDl: "~50–80 s",
     blurb: "Bigger brain for CPU mode — slow, but surprisingly clever.",
   },
@@ -425,7 +428,7 @@ export const WASM_CATALOG = [
     modelId: "onnx-community/Llama-3.2-1B-Instruct",
     name: "Llama 3.2 1B", family: "Llama", params: "1B",
     sizeMB: 750, vramMB: 1300, ctx: 2048, quality: 4, tier: "wasm",
-    dtypes: ["q4f16", "q4", "q8"], stable: true, tps: [0.5, 3],
+    dtypes: ["q4", "q8", "q4f16"], stable: true, tps: [0.5, 3],
     estDl: "~35–50 s",
     blurb: "Strongest CPU mode — for patient users with beefy processors.",
   },
@@ -462,6 +465,7 @@ export const DEFAULT_SETTINGS = {
   animations: true,
   sendOnEnter: true,
   cacheBackend: "cache",    // cache (Cache API) | opfs (experimental)
+  idleUnload: "auto",       // auto | off | 5 | 15 | 60 — release the model when idle (minutes)
   downloaded: {},           // { modelKey: { ts, bytes } }
   onboarded: false,
   lastThreadId: null,
@@ -473,4 +477,18 @@ export const LIMITS = {
   maxInputChars: 4000,
   renderWindow: 60, // how many recent messages to render (perf on weak phones)
   renderWindowSafe: 30, // same, when Safe Mode is active
+  maxRenderChars: 12000, // longer messages render on demand (keeps the DOM light)
+  draftSaveMs: 600, // debounce for the composer crash-guard draft
+  partialSaveMs: 3000, // how often a streaming answer is persisted (crash safety)
+};
+
+/**
+ * Idle-unload timeouts in milliseconds ("auto" resolves per device class).
+ * Releasing the model frees GPU/RAM — the main defence against OOM kills
+ * on phones — at the cost of a fast reload from the local cache.
+ */
+export const IDLE_UNLOAD_MS = {
+  autoWeak: 6 * 60000,   // phones / weak GPUs: be aggressive
+  autoStrong: 30 * 60000, // desktop: barely noticeable
+  fixed: { "5": 5 * 60000, "15": 15 * 60000, "60": 60 * 60000 },
 };
