@@ -4,7 +4,7 @@
 // (WebLLM / Transformers.js) we własnych magazynach Cache API.
 // Podwójne cache'owanie marnowałoby setki MB na słabych telefonach.
 // ─────────────────────────────────────────────────────────────
-const APP_CACHE = "offchat-shell-v1";
+const APP_CACHE = "offchat-shell-v2";
 const CDN_CACHE = "offchat-cdn-v1";
 
 const SHELL = [
@@ -15,6 +15,7 @@ const SHELL = [
   "./css/style.css",
   "./js/app.js",
   "./js/config.js",
+  "./js/download-hub.js",
   "./js/hardware.js",
   "./js/storage.js",
   "./js/engine.js",

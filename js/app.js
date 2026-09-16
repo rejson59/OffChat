@@ -14,11 +14,14 @@ import {
   exportAll, importAll, storageInfo, clearModelCaches,
 } from "./storage.js";
 import { EngineProxy } from "./engine-proxy.js";
+import { DownloadHub } from "./download-hub.js";
 import { renderMarkdown, estimateTokens } from "./markdown.js";
 import {
   $, $all, el, toast, openModal, confirmDialog,
   fmtBytes, fmtSizeMB, timeAgoPL, autoTitle, copyText, downloadFile, escapeHtml,
 } from "./ui.js";
+
+let downloadHub = null;
 
 const S = {
   settings: loadSettings(),
@@ -36,6 +39,7 @@ const S = {
   installEvt: null,
   nearBottom: true,
   threadFilter: "",
+  queuedPrompt: null,
 };
 
 const STATUS_META = {
@@ -87,6 +91,38 @@ async function boot() {
   matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
     if (S.settings.theme === "auto") applyTheme();
   });
+
+  // Inicjalizacja Centrum Pobierania (Telemetria, gry, ciekawostki, dock)
+  downloadHub = new DownloadHub({
+    onMinimize: () => {
+      toast("Pobieranie trwa w tle (widżet na dole) — możesz swobodnie przeglądać czat i ustawienia! 🔍", "info", 4500);
+    },
+    onExpand: () => {},
+    onAbort: () => {
+      S.proxy.abort();
+      S.downloading = false;
+      setStatus("idle", "pobieranie anulowane");
+      toast("Pobieranie modelu zostało przerwane", "warn");
+    },
+    onUsePrompt: (promptText) => {
+      const ta = $("#input");
+      if (ta) {
+        ta.value = promptText;
+        autogrow();
+        ta.focus();
+        toast("Wklejono prompt do czatu! ✨", "ok");
+      }
+    },
+    onQueuePrompt: (promptText) => {
+      queuePrompt(promptText);
+    },
+  });
+  S.downloadHub = downloadHub;
+
+  // Żądanie trwałego przechowywania (persistent storage)
+  if (navigator.storage?.persist) {
+    navigator.storage.persist().catch(() => {});
+  }
 
   bindUI();
   renderSuggestions();
@@ -201,8 +237,15 @@ function bindUI() {
     if (S.downloading || S.generating) e.preventDefault();
   });
 
-  $("#btn-dl-hide").addEventListener("click", () => {
-    $("#download-overlay").hidden = true;
+  const pill = $("#status-pill");
+  pill.style.cursor = "pointer";
+  pill.setAttribute("title", "Kliknij, aby zarządzać modelem lub postępem pobierania");
+  pill.addEventListener("click", () => {
+    if (S.downloading) {
+      downloadHub?.expand();
+    } else if (!S.engineLoaded) {
+      openModelPicker();
+    }
   });
 }
 
@@ -427,10 +470,80 @@ function onMessagesClick(e) {
 }
 
 // ── Wysyłanie / generowanie ───────────────────────────────────
+async function queuePrompt(text) {
+  if (!text || S.generating) return;
+  const ta = $("#input");
+  if (ta) {
+    ta.value = "";
+    autogrow();
+  }
+
+  // Upewnij się, że mamy wątek roboczy
+  if (!S.activeId) {
+    const t = await Threads.create({
+      title: autoTitle(text),
+      modelKey: S.model?.key || null,
+      modelId: S.model?.modelId || null,
+      engine: S.model?.engine || null,
+    });
+    S.activeId = t.id;
+    S.settings = saveSettings({ lastThreadId: t.id });
+    await refreshThreads();
+  } else {
+    const t = S.threads.find((x) => x.id === S.activeId);
+    if (t && (t.title === "Nowa rozmowa" || !t.title)) {
+      await Threads.update(S.activeId, { title: autoTitle(text) });
+      await refreshThreads();
+    }
+  }
+
+  const userMsg = await Messages.add(S.activeId, { role: "user", content: text });
+  const box = $("#messages");
+  const uNode = msgNode("user", escapeHtml(text).replace(/\n/g, "<br>"));
+  uNode.dataset.mid = userMsg.id;
+  uNode.dataset.raw = text;
+  box.appendChild(uNode);
+
+  const qNode = msgNode(
+    "assistant",
+    `<div class="queued-indicator">⏳ Model w trakcie pobierania (<span id="queued-dl-pct">0%</span>) — odpowiedź pojawi się automatycznie!</div>`,
+    ""
+  );
+  box.appendChild(qNode);
+
+  updateWelcome();
+  scrollBottom(true);
+
+  S.queuedPrompt = {
+    threadId: S.activeId,
+    text,
+    placeholderNode: qNode,
+  };
+
+  toast("Wiadomość czeka w kolejce — wyśle się automatycznie po załadowaniu! 🚀", "ok", 4000);
+}
+
+async function processQueuedPrompt() {
+  if (!S.queuedPrompt) return;
+  const { placeholderNode } = S.queuedPrompt;
+  S.queuedPrompt = null;
+  if (placeholderNode && placeholderNode.parentNode) {
+    placeholderNode.remove();
+  }
+  toast("Model gotowy — generuję odpowiedź na Twoje pytanie… ✨", "ok");
+  await generateReply();
+}
+
 async function onSend() {
   const ta = $("#input");
   const text = ta.value.trim();
   if (!text || S.generating) return;
+
+  if (S.downloading) {
+    await queuePrompt(text);
+    return;
+  }
+
   if (!(await ensureEngine())) return;
 
   ta.value = "";
@@ -636,7 +749,7 @@ async function loadModel(key, { auto = false } = {}) {
   if (!model) throw new Error("Nieznany model.");
   if (S.downloading) {
     toast("Trwa już ładowanie modelu…", "info");
-    $("#download-overlay").hidden = false;
+    downloadHub?.expand();
     return;
   }
   if (!S.hw) {
@@ -649,24 +762,21 @@ async function loadModel(key, { auto = false } = {}) {
     toast("Tryb oszczędzania danych: pobieranie dużego modelu…", "warn", 5000);
   }
 
+  // Wymuszenie trwałego przechowywania (persistent storage)
+  if (navigator.storage?.persist) {
+    navigator.storage.persist().catch(() => {});
+  }
+
   S.downloading = true;
   S.model = model;
   S.settings = saveSettings({ modelKey: key });
   updateModelChip();
 
-  const overlay = $("#download-overlay");
-  overlay.hidden = false;
-  $("#dl-title").textContent = `${auto ? "Wznawianie" : "Pobieranie"}: ${model.name}`;
-  $("#dl-sub").textContent = S.settings.downloaded[key]
-    ? "Model jest w pamięci podręcznej — ładowanie potrwa chwilę."
-    : `Pierwsze pobranie to ${fmtSizeMB(model.sizeMB)} — kolejne starty będą natychmiastowe i offline.`;
-  const bar = $("#dl-bar"), pct = $("#dl-pct"), txt = $("#dl-text");
+  downloadHub?.start(model, { auto });
 
   const onProgress = (p) => {
+    downloadHub?.updateProgress(p);
     const percent = Math.round((p.progress || 0) * 100);
-    bar.style.width = `${percent}%`;
-    pct.textContent = `${percent}%`;
-    txt.textContent = p.text || "";
     if (p.phase === "download") setStatus("download", `${model.name} · ${percent}%`);
     else if (p.phase === "load") setStatus("load", model.name);
   };
@@ -699,6 +809,10 @@ async function loadModel(key, { auto = false } = {}) {
     setStatus("ready", model.name + (navigator.onLine ? "" : " · offline"));
     toast(`Gotowy: ${model.name} — działa lokalnie${navigator.onLine ? "" : " (offline)"}`, "ok");
     if (!S.settings.onboarded) S.settings = saveSettings({ onboarded: true });
+
+    if (S.queuedPrompt) {
+      processQueuedPrompt();
+    }
   } catch (e) {
     console.error(e);
     S.engineLoaded = false;
@@ -707,8 +821,7 @@ async function loadModel(key, { auto = false } = {}) {
     throw e;
   } finally {
     S.downloading = false;
-    overlay.hidden = true;
-    bar.style.width = "0%";
+    downloadHub?.finish();
   }
 }
 
@@ -720,7 +833,7 @@ function starsHTML(n) {
 function modelCardHTML(m, { recommended = false, fits = true, active = false } = {}) {
   const dl = S.settings.downloaded[m.key];
   const needPct = S.rec ? Math.min(100, Math.round((m.vramMB * 1.12 / S.rec.budgetMB) * 100)) : 0;
-  return `<div class="model-card ${recommended ? "recommended" : ""} ${active ? "active" : ""} ${!fits ? "dim" : ""}" data-key="${m.key}">
+  return `<div class="model-card ${recommended ? "recommended" : ""} ${active ? "active" : ""} ${!fits ? "dim" : ""}" data-key="${m.key}" data-size="${m.sizeMB}">
     <div class="model-top">
       <strong>${escapeHtml(m.name)}</strong>
       <span class="params">${escapeHtml(m.params)}</span>
@@ -735,6 +848,7 @@ function modelCardHTML(m, { recommended = false, fits = true, active = false } =
     <div class="model-meta">
       <span>🇵🇱 <span class="stars">${starsHTML(m.pl)}</span></span>
       <span>⬇️ <b>${fmtSizeMB(m.sizeMB)}</b></span>
+      ${m.estDl ? `<span class="badge-fast" title="Szacowany czas pobierania przy standardowym łączu">⚡ ${escapeHtml(m.estDl)}</span>` : ""}
       <span>🧠 <b>${fmtBytes(m.vramMB)}</b></span>
       <span>📏 ${(m.ctx / 1024).toFixed(0)}k ctx</span>
       ${m.needsF16 ? `<span title="Wymaga shader-f16">⚡F16</span>` : ""}
@@ -790,18 +904,13 @@ function openOnboarding() {
       ${isWasm ? "Brak WebGPU — proponujemy lekkie modele CPU (WASM)." : "Wybierz jeden — pobierze się raz, a potem działa offline."}</p>
       ${hwCardHTML()}${catalogHTML(catalog)}`,
   });
-  body.addEventListener("click", async (e) => {
+  body.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-load]");
     if (!btn) return;
-    btn.disabled = true;
-    try {
-      await loadModel(btn.dataset.load);
-      close();
-      if (!S.activeId) newChat();
-      toast("Model gotowy — napisz pierwszą wiadomość! ✨", "ok");
-    } catch {
-      btn.disabled = false;
-    }
+    const key = btn.dataset.load;
+    close();
+    if (!S.activeId) newChat();
+    loadModel(key).catch(() => {});
   });
 }
 
@@ -811,6 +920,12 @@ function openModelPicker() {
     title: "🤖 Wybierz model AI",
     wide: true,
     html: `${hwCardHTML()}
+      <div class="filter-pills" id="model-filters">
+        <button class="filter-pill active" data-filter="all">Wszystkie</button>
+        <button class="filter-pill" data-filter="fast">⚡ Błyskawiczne (&lt; 500 MB)</button>
+        <button class="filter-pill" data-filter="mid">⚖️ Zrównoważone (0.5 – 2 GB)</button>
+        <button class="filter-pill" data-filter="max">💎 Desktop (&gt; 2 GB)</button>
+      </div>
       ${web ? catalogHTML(MODEL_CATALOG) : `<p class="muted">Brak WebGPU — dostępne modele CPU:</p>` + catalogHTML(WASM_CATALOG)}
       ${web ? `<div class="tier-title">Tryb zgodności<small>Gdy WebGPU sprawia problemy — wolniejsze modele CPU (WASM)</small></div><div class="model-grid">${WASM_CATALOG.map((m) => modelCardHTML(m, { fits: true, active: S.engineModelKey === m.key && S.engineLoaded })).join("")}</div>` : ""}
       <div class="row end gap">
@@ -818,6 +933,33 @@ function openModelPicker() {
         <button class="btn ghost sm" id="m-close">Zamknij</button>
       </div>`,
   });
+
+  const filterPills = body.querySelectorAll(".filter-pill");
+  filterPills.forEach((pill) => {
+    pill.addEventListener("click", () => {
+      filterPills.forEach((p) => p.classList.remove("active"));
+      pill.classList.add("active");
+      const filter = pill.dataset.filter;
+      const cards = body.querySelectorAll(".model-card");
+      cards.forEach((card) => {
+        const size = Number(card.dataset.size || 0);
+        let show = true;
+        if (filter === "fast") show = size < 500;
+        else if (filter === "mid") show = size >= 500 && size <= 2000;
+        else if (filter === "max") show = size > 2000;
+        card.style.display = show ? "" : "none";
+      });
+      body.querySelectorAll(".tier-title").forEach((title) => {
+        const grid = title.nextElementSibling;
+        if (grid && grid.classList.contains("model-grid")) {
+          const hasVisible = [...grid.querySelectorAll(".model-card")].some((c) => c.style.display !== "none");
+          title.style.display = hasVisible ? "" : "none";
+          grid.style.display = hasVisible ? "" : "none";
+        }
+      });
+    });
+  });
+
   body.querySelector("#m-close").addEventListener("click", close);
   body.querySelector("#m-unload")?.addEventListener("click", async () => {
     await S.proxy.unload().catch(() => {});
@@ -827,16 +969,12 @@ function openModelPicker() {
     toast("Model zwolniony z pamięci", "ok");
     close();
   });
-  body.addEventListener("click", async (e) => {
+  body.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-load]");
     if (!btn || btn.id === "m-close" || btn.id === "m-unload") return;
-    btn.disabled = true;
-    try {
-      await loadModel(btn.dataset.load);
-      close();
-    } catch {
-      btn.disabled = false;
-    }
+    const key = btn.dataset.load;
+    close();
+    loadModel(key).catch(() => {});
   });
 }
 
